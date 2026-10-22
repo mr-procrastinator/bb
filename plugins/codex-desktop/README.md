@@ -42,6 +42,12 @@ bb codex-desktop chats
 bb codex-desktop open 01234567-89ab-cdef-0123-456789abcdef
 ```
 
+Cross-plugin callers can constrain `openThread` with optional `expectedHostId`.
+The server reads its configured host once, rejects a mismatch as `host_changed`,
+and sends to that same captured host. This constraint never selects another
+destination. Omitting it preserves ordinary direct opening. The existing host
+opener still validates the observed local chat before invoking macOS.
+
 The bundled [open-codex-desktop skill](skills/open-codex-desktop/SKILL.md)
 documents target selection, configuration and opening limits for agents.
 

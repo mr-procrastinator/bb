@@ -31,6 +31,12 @@ The same operations are available through typed plugin RPC and CLI:
 bb personal-os missions
 bb personal-os mission mission_0123456789abcdef0123456789abcdef
 bb personal-os tasks mission_0123456789abcdef0123456789abcdef
+bb personal-os inputs
+bb personal-os inputs mission_0123456789abcdef0123456789abcdef
+bb personal-os input note_0123456789abcdef0123456789abcdef
+bb personal-os input-artifact note_0123456789abcdef0123456789abcdef input_result_0123456789abcdef0123456789abcdef
+bb personal-os task-chat task_0123456789abcdef0123456789abcdef
+bb personal-os open-task-chat task_0123456789abcdef0123456789abcdef 1
 bb personal-os submit 01234567-89ab-4def-8123-456789abcdef "Collect my next three priorities"
 bb personal-os submit-mission 11234567-89ab-4def-8123-456789abcdef mission_0123456789abcdef0123456789abcdef 12 "Clarify the next step"
 bb personal-os submission 01234567-89ab-4def-8123-456789abcdef
@@ -46,6 +52,37 @@ Task state `doing` is not proof of a running process. Historical `done` tasks do
 appear in a separate expandable history, outside current **Готово**. An unspecified
 executor remains explicitly unknown. Evidence counts refer to recorded sources, not
 independent inspection. Full product acceptance remains separate.
+
+## Instructions, results and linked chats
+
+`listInputs` reads up to 20 personal instructions by default, or instructions for
+an explicitly selected goal. Scope is checked against the returned items; general
+inbox items are not silently assigned to the active goal. Total count and
+`truncated` describe omitted records. `getInput` returns the original text, current
+saved note state, original validated triage plan and attached partial results.
+The plan records proposed work, not execution. Its goal-version flag compares an
+audit version, not semantic product acceptance.
+
+`getInputArtifact` accepts only the note and attached result IDs. The host first
+reads that exact attachment's descriptor, then fetches its owner route. It checks
+the original byte length and SHA-256 before parsing JSON. Only bounded research
+summary, findings, recommendations and limitations reach the browser, alongside
+that result's scoped review and currentness. No raw HTML, local URL, receipt
+locator, model metadata or source history is projected. A successful byte check
+does not change review or complete the instruction.
+
+`getTaskChat` reads Personal OS's explicit task-to-Desktop binding. `openTaskChat`
+accepts only a task ID and the displayed link version. It rereads the owner on the
+captured configured host and requires current task/context, an available target,
+and the same link version. It then calls the existing Codex Desktop plugin opener
+with the exact bound UUID and an expected-host constraint. Different plugin host
+settings reject opening; a browser cannot choose a host or URL. No workspace or
+title matching creates a binding. Stale observations remain marked as such.
+
+Opening is explicit navigation on the configured Mac, including requests from a
+phone. `open_requested` retains `navigationConfirmed:false`: it does not prove the
+intended chat appeared. Unknown opening outcomes are not automatically retried.
+No new chat, message, provider resume or model execution is added.
 
 ## Owner input and recovery
 
@@ -94,7 +131,10 @@ reload, but not closing the tab.
 ## Boundaries
 
 Reads use only GET `/api/missions`, `/api/missions/<mission_id>` and
-`/api/tasks?mission_id=<mission_id>`. Responses are limited to 2 MiB,
+`/api/tasks?mission_id=<mission_id>`, the bounded `/api/inbox` list/detail and
+exact note/result artifact routes, and `/api/task-chat-links?task_id=<task_id>`.
+Responses are limited to 2 MiB for goals/tasks, 1 MiB for inbox lists, 512 KiB for
+instruction details and exact artifact bytes, and 64 KiB for chat bindings;
 100 goals and 500 tasks; requests time out after five seconds. IDs and responses
 are validated at the host boundary. Redirects are rejected. Raw responses,
 credentials, source payloads and arbitrary URLs are not sent to the frontend.
@@ -102,9 +142,9 @@ POST uses only the two owner-input endpoints above, with a 16 KiB reply limit.
 The host adds the local client header; no credential is copied into the browser.
 
 `/api/control` is deliberately excluded because it records skill observations.
-The plugin has no task/status write, dispatch, model, chat-creation or Codex deep-link action.
-Decisions, partial-result documents and thread bindings are outside this first
-slice. The command ledger is initialized during plugin loading. Outcome reads
+The plugin has no task/status write, dispatch, model or chat-creation action.
+Decision answers remain outside this slice. It delegates explicit Desktop
+navigation to the existing opener rather than adding a second opener. The command ledger is initialized during plugin loading. Outcome reads
 do not initialize storage. There is no background poller or automatic resend.
 
 ## Development

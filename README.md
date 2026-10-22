@@ -9,7 +9,7 @@
 # bb
 
 This is the [Personal OS fork](https://github.com/mr-procrastinator/bb) of get-bb/bb.
-The Personal OS plugin reads goals/tasks and saves explicit owner instructions through the existing Personal OS API. A separate Codex Desktop plugin searches observed local chats and requests opening the exact original chat. Existing Claude/Codex logins are detected in the local pilot; a second account, phone access, and an AiweApps execution adapter remain separate work.
+The Personal OS plugin reads goals, tasks, saved instructions, plans and attached research from the existing Personal OS API. It saves explicit owner input and opens an explicitly linked task chat through the Codex Desktop plugin. That plugin also searches observed local chats. Existing Claude/Codex logins are detected in the local pilot; a second account, phone access, and an AiweApps execution adapter remain separate work.
 See [integration architecture and progress](docs/personal-os.md) and [owner rules](.bb/AGENTS.md).
 
 For the already enrolled local pilot, use `node scripts/personal-os-runtime.mjs setup`, then `start`,

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { lookupInputSchema, missionInputSchema, personalOsContract, personalOsHostContract, submissionResultSchema, submitInputSchema, type MissionResult, type MissionsResult, type TasksResult, type SubmitInput, type SubmissionResult, type SubmissionLookupResult } from "./contract.js";
+import { lookupInputSchema, missionInputSchema, personalOsContract, personalOsHostContract, submissionResultSchema, submitInputSchema, listInputsInputSchema, getInputInputSchema, inputArtifactInputSchema, taskChatInputSchema, openTaskChatInputSchema, desktopOpenResultSchema, type MissionResult, type MissionsResult, type TasksResult, type SubmitInput, type SubmissionResult, type SubmissionLookupResult, type InputsResult, type InputDetailResult, type InputArtifactResult, type TaskChatResult, type OpenTaskChatResult } from "./contract.js";
 
-const HELP = "bb personal-os missions\nbb personal-os mission <mission_id>\nbb personal-os tasks <mission_id>\nbb personal-os submit <request-uuid> <quoted-text>\nbb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>\nbb personal-os submission <request-uuid>\nJSON reads and bounded owner input. Repeat unknown outcomes with the exact request UUID, text and target. Configure the enrolled host ID with bb plugin config personal-os.";
+const HELP = "bb personal-os missions\nbb personal-os mission <mission_id>\nbb personal-os tasks <mission_id>\nbb personal-os inputs [mission_id]\nbb personal-os input <note_id>\nbb personal-os input-artifact <note_id> <input_result_id>\nbb personal-os task-chat <task_id>\nbb personal-os open-task-chat <task_id> <expected-link-version>\nbb personal-os submit <request-uuid> <quoted-text>\nbb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>\nbb personal-os submission <request-uuid>\nJSON reads, bounded owner input and explicit linked-chat navigation. Repeat unknown save outcomes with the exact request UUID, text and target. Configure the enrolled host ID with bb plugin config personal-os.";
 
 const commandRowSchema = z.object({
   request_id: lookupInputSchema.shape.requestId,
@@ -159,10 +159,52 @@ export default function plugin(bb: BbPluginApi) {
     }
   }
 
+  async function openTaskChat(input: z.infer<typeof openTaskChatInputSchema>): Promise<OpenTaskChatResult> {
+    const unavailable = (reason: Extract<OpenTaskChatResult, { state: "unavailable" }>["reason"]): OpenTaskChatResult => ({ state: "unavailable", observedAt: new Date().toISOString(), reason });
+    let hostId: string;
+    try {
+      const current = await settings.get();
+      if (!current.hostId) return unavailable("host_not_configured");
+      hostId = current.hostId;
+    } catch {
+      return unavailable("host_unavailable");
+    }
+    let observation: TaskChatResult;
+    try {
+      observation = await host.call("getTaskChat", { taskId: input.taskId }, { hostId, timeoutMs: 10000 });
+    } catch {
+      return unavailable("host_unavailable");
+    }
+    if (observation.state !== "available") return observation;
+    const data = observation.data;
+    const link = data.link;
+    if (data.state !== "available" || link === null) return unavailable("link_unavailable");
+    if (link.version !== input.expectedLinkVersion) return unavailable("link_changed");
+    if (data.task_current !== true) return unavailable("task_not_current");
+    if (data.context_current !== true) return unavailable("context_not_current");
+    if (data.target.state !== "available") return unavailable("target_unavailable");
+    if (!data.can_open) return unavailable("link_unavailable");
+    try {
+      const result = await bb.sdk.plugins.callRpc({
+        pluginId: "codex-desktop", method: "openThread", input: { threadId: link.desktop_thread_id, expectedHostId: hostId },
+        outputSchema: desktopOpenResultSchema, signal: AbortSignal.timeout(18000),
+      });
+      if (result.state === "open_requested" && result.threadId !== link.desktop_thread_id) return unavailable("invalid_response");
+      return result;
+    } catch {
+      return unavailable("open_outcome_unknown");
+    }
+  }
+
   const handlers: PluginRpcHandlers<typeof personalOsContract> = {
     listMissions: () => hostCall(hostId => host.call("listMissions", null, { hostId, timeoutMs: 10000 })),
     getMission: input => hostCall(hostId => host.call("getMission", input, { hostId, timeoutMs: 10000 })),
     listTasks: input => hostCall(hostId => host.call("listTasks", input, { hostId, timeoutMs: 10000 })),
+    listInputs: input => hostCall(hostId => host.call("listInputs", input, { hostId, timeoutMs: 10000 })),
+    getInput: input => hostCall(hostId => host.call("getInput", input, { hostId, timeoutMs: 10000 })),
+    getInputArtifact: input => hostCall(hostId => host.call("getInputArtifact", input, { hostId, timeoutMs: 15000 })),
+    getTaskChat: input => hostCall(hostId => host.call("getTaskChat", input, { hostId, timeoutMs: 10000 })),
+    openTaskChat,
     submitInput,
     getInputSubmission,
   };
@@ -174,19 +216,44 @@ export default function plugin(bb: BbPluginApi) {
       { name: "missions", summary: "List goals", usage: "bb personal-os missions" },
       { name: "mission", summary: "Read one goal", usage: "bb personal-os mission <mission_id>" },
       { name: "tasks", summary: "Read goal tasks", usage: "bb personal-os tasks <mission_id>" },
+      { name: "inputs", summary: "List personal instructions, or explicit goal instructions", usage: "bb personal-os inputs [mission_id]" },
+      { name: "input", summary: "Read original instruction, saved plan and attached results", usage: "bb personal-os input <note_id>" },
+      { name: "input-artifact", summary: "Read exact attached research as bounded public content", usage: "bb personal-os input-artifact <note_id> <input_result_id>" },
+      { name: "task-chat", summary: "Read the owner's explicit Desktop chat binding", usage: "bb personal-os task-chat <task_id>" },
+      { name: "open-task-chat", summary: "Explicitly request opening the current bound chat on its Mac", usage: "bb personal-os open-task-chat <task_id> <expected-link-version>" },
       { name: "submit", summary: "Save a personal instruction with a stable request UUID", usage: "bb personal-os submit <request-uuid> <quoted-text>" },
       { name: "submit-mission", summary: "Save an instruction pinned to a goal version", usage: "bb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>" },
       { name: "submission", summary: "Read a saved command outcome without network or dispatch", usage: "bb personal-os submission <request-uuid>" },
     ],
     async run(argv) {
       if (argv.length === 0 || (argv.length === 1 && ["help", "--help", "-h"].includes(argv[0]))) return { exitCode: 0, stdout: HELP };
-      let result: MissionsResult | MissionResult | TasksResult | SubmissionLookupResult;
+      let result: MissionsResult | MissionResult | TasksResult | SubmissionLookupResult | InputsResult | InputDetailResult | InputArtifactResult | TaskChatResult | OpenTaskChatResult;
       if (argv[0] === "missions" && argv.length === 1) {
         result = await handlers.listMissions(null);
       } else if ((argv[0] === "mission" || argv[0] === "tasks") && argv.length === 2) {
         const input = missionInputSchema.safeParse({ missionId: argv[1] });
         if (!input.success) return { exitCode: 1, stderr: "Invalid mission ID.\n" + HELP };
         result = argv[0] === "mission" ? await handlers.getMission(input.data) : await handlers.listTasks(input.data);
+      } else if (argv[0] === "inputs" && (argv.length === 1 || argv.length === 2)) {
+        const input = listInputsInputSchema.safeParse(argv.length === 1 ? { scope: "personal" } : { scope: "mission", missionId: argv[1] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid instruction scope.\n" + HELP };
+        result = await handlers.listInputs(input.data);
+      } else if (argv[0] === "input" && argv.length === 2) {
+        const input = getInputInputSchema.safeParse({ noteId: argv[1] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid note ID.\n" + HELP };
+        result = await handlers.getInput(input.data);
+      } else if (argv[0] === "input-artifact" && argv.length === 3) {
+        const input = inputArtifactInputSchema.safeParse({ noteId: argv[1], resultId: argv[2] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid note/result ID.\n" + HELP };
+        result = await handlers.getInputArtifact(input.data);
+      } else if (argv[0] === "task-chat" && argv.length === 2) {
+        const input = taskChatInputSchema.safeParse({ taskId: argv[1] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid task ID.\n" + HELP };
+        result = await handlers.getTaskChat(input.data);
+      } else if (argv[0] === "open-task-chat" && argv.length === 3) {
+        const input = openTaskChatInputSchema.safeParse({ taskId: argv[1], expectedLinkVersion: /^[1-9][0-9]*$/.test(argv[2]) ? Number(argv[2]) : null });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid task ID or expected link version.\n" + HELP };
+        result = await openTaskChat(input.data);
       } else if (argv[0] === "submission" && argv.length === 2) {
         const input = lookupInputSchema.safeParse({ requestId: argv[1] });
         if (!input.success) return { exitCode: 1, stderr: "Invalid request UUID.\n" + HELP };
@@ -200,7 +267,7 @@ export default function plugin(bb: BbPluginApi) {
       } else {
         return { exitCode: 1, stderr: "Unknown command or arguments.\n" + HELP };
       }
-      return { exitCode: result.state === "available" || result.state === "saved" ? 0 : ["not_sent", "rejected", "not_found"].includes(result.state) ? 1 : 2, stdout: JSON.stringify(result, null, 2) };
+      return { exitCode: result.state === "available" || result.state === "saved" || result.state === "open_requested" ? 0 : ["not_sent", "rejected", "not_found"].includes(result.state) ? 1 : 2, stdout: JSON.stringify(result, null, 2) };
     },
   });
 }

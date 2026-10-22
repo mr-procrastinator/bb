@@ -60,6 +60,99 @@ export function readResultSchema<S extends z.ZodType>(schema: S) {
   ]);
 }
 
+const timestampSchema = z.string().datetime({ offset: true });
+const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export const noteIdSchema = z.string().regex(/^note_[a-f0-9]{32}$/);
+export const resultIdSchema = z.string().regex(/^input_result_[a-f0-9]{32}$/);
+export const taskIdSchema = z.string().regex(/^task_[a-f0-9]{32}$/);
+const desktopIdSchema = z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
+const nullableFlag = z.boolean().nullable();
+const boundedText = (limit: number) => z.string().max(limit * 2).refine(value => [...value].length <= limit && !value.includes("\0"));
+
+export const listInputsInputSchema = z.discriminatedUnion("scope", [
+  z.object({ scope: z.literal("personal") }).strict(),
+  z.object({ scope: z.literal("mission"), missionId: missionIdSchema }).strict(),
+]);
+export const getInputInputSchema = z.object({ noteId: noteIdSchema }).strict();
+export const inputArtifactInputSchema = getInputInputSchema.extend({ resultId: resultIdSchema }).strict();
+export const taskChatInputSchema = z.object({ taskId: taskIdSchema }).strict();
+export const openTaskChatInputSchema = taskChatInputSchema.extend({ expectedLinkVersion: z.number().int().positive() }).strict();
+
+const planSchema = z.object({
+  summary: boundedText(4000), required_outcomes: z.array(boundedText(4000)).max(30),
+  findings: z.array(z.object({ description: boundedText(4000), severity: z.enum(["low", "medium", "high"]) })).max(30),
+  next_actions: z.array(z.object({ title: boundedText(4000), reason: boundedText(4000) })).max(30),
+  questions: z.array(boundedText(4000)).max(30),
+});
+const triageSchema = z.object({
+  state: z.enum(["available", "empty", "unavailable", "error"]), run_id: z.string().max(200).nullable(), run_state: z.string().max(100).nullable(),
+  summary: boundedText(4000).nullable(), plan: planSchema.nullable(), note_current: nullableFlag, mission_version_current: nullableFlag,
+  execution_performed: z.literal(false), created_at: timestampSchema.nullable(), finished_at: timestampSchema.nullable(), error_code: z.string().max(200).nullable(),
+});
+const reviewSchema = z.object({
+  state: z.enum(["available", "empty", "unavailable", "error"]), id: z.string().max(200).nullable(),
+  outcome: z.enum(["no_blocking_findings", "changes_required", "inconclusive"]).nullable(), applicable: z.boolean(),
+  applicable_at_recording: z.boolean().optional(), created_at: timestampSchema.optional(),
+  finding_ids: z.array(z.string().max(200)).max(100).optional(), correction_state: z.string().max(100).nullable().optional(), independence_basis: z.string().max(200).optional(),
+});
+const publicArtifactSchema = z.object({ name: z.literal("research.json"), sha256: hashSchema, size: z.number().int().positive().max(512 * 1024) });
+export const sourceArtifactSchema = publicArtifactSchema.extend({
+  receipt_id: z.string().max(200), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/),
+  revision: z.number().int().positive(), candidate_hash: hashSchema,
+});
+export const partialResultSchema = z.object({
+  id: resultIdSchema, note_id: noteIdSchema, summary: boundedText(4000), next_action: boundedText(4000).nullable(),
+  scope: z.literal("partial_result"), binding_basis: z.literal("operator_attached"), note_current: nullableFlag,
+  note_context_state: z.enum(["available", "unavailable", "error"]), candidate_current: nullableFlag,
+  candidate_id: z.string().max(200), note_version_at_attachment: z.number().int().positive(),
+  result_availability: z.literal("not_rechecked"), review: reviewSchema, created_at: timestampSchema, artifact: publicArtifactSchema,
+});
+const resultsSchema = z.object({
+  state: z.enum(["available", "unavailable", "error"]), items: z.array(partialResultSchema).max(5), total_count: z.number().int().nonnegative().nullable(),
+  truncated: z.boolean(), error_code: z.string().max(200).nullable(),
+});
+const sourceResultsSchema = resultsSchema.extend({ items: z.array(partialResultSchema.extend({ artifact: sourceArtifactSchema })).max(5) });
+export const inputItemSchema = z.object({
+  id: noteIdSchema, project_id: z.string().max(100).nullable(), text: boundedText(20000), input_kind: z.enum(["text", "voice"]),
+  state: z.enum(["new", "reviewing", "planned", "done"]), version: z.number().int().positive(), mission_id: missionIdSchema.nullable(),
+  mission_link_state: z.enum(["linked", "unlinked"]), created_at: timestampSchema, updated_at: timestampSchema, triage: triageSchema, results: resultsSchema,
+});
+export const inputDetailSchema = inputItemSchema.extend({ response: boundedText(20000) });
+export const sourceInputDetailSchema = inputDetailSchema.extend({ results: sourceResultsSchema });
+const inputListSchema = z.object({
+  schema_version: z.literal(1), scope: z.enum(["personal", "mission"]), mission_id: missionIdSchema.nullable(), items: z.array(inputItemSchema).max(20),
+  total_count: z.number().int().nonnegative(), truncated: z.boolean(), read_at: timestampSchema,
+});
+export const sourceInputListSchema = inputListSchema.extend({ items: z.array(inputItemSchema.extend({ results: sourceResultsSchema })).max(20) });
+const inputDetailResponseSchema = z.object({ schema_version: z.literal(1), item: inputDetailSchema, read_at: timestampSchema });
+export const sourceInputDetailResponseSchema = inputDetailResponseSchema.extend({ item: sourceInputDetailSchema });
+export const researchContentSchema = z.object({
+  summary: boundedText(12000), findings: z.array(z.object({ claim: boundedText(10000), source_ids: z.array(boundedText(200)).min(1).max(30) })).min(1).max(100),
+  recommendations: z.array(boundedText(10000)).max(100), limitations: z.array(boundedText(10000)).min(1).max(100),
+});
+export const inputArtifactSchema = z.object({
+  noteId: noteIdSchema, resultId: resultIdSchema, candidateId: z.string().max(200), artifact: publicArtifactSchema,
+  content: researchContentSchema, review: reviewSchema, noteCurrent: nullableFlag, candidateCurrent: nullableFlag, integrity: z.literal("sha256_verified"),
+});
+
+export const taskChatSchema = z.object({
+  state: z.enum(["available", "unlinked", "unavailable"]), task_id: taskIdSchema, mission_id: missionIdSchema.nullable(),
+  task_version: z.number().int().positive().nullable(), current_context_hash: hashSchema.nullable(), task_current: nullableFlag, context_current: nullableFlag, can_open: z.boolean(),
+  link: z.object({ id: z.string().regex(/^task_chat_link_[a-f0-9]{32}$/), version: z.number().int().positive(), task_version: z.number().int().positive(),
+    context_hash: hashSchema, desktop_thread_id: desktopIdSchema, desktop_host: z.literal("local"), created_at: timestampSchema }).nullable(),
+  target: z.object({ state: z.enum(["available", "unavailable"]), observed_at: timestampSchema.nullable(), freshness: z.enum(["fresh", "stale", "unknown"]), in_current_scope: nullableFlag, error_code: z.string().max(200).nullable() }),
+  error_code: z.string().max(200).nullable(),
+}).refine(value => !value.can_open || (value.state === "available" && value.link !== null && value.task_current === true && value.context_current === true && value.target.state === "available" && value.task_version === value.link.task_version && value.current_context_hash === value.link.context_hash));
+
+export const desktopOpenResultSchema = z.union([
+  z.object({ state: z.literal("open_requested"), threadId: desktopIdSchema, requestedAt: timestampSchema, sourceObservedAt: timestampSchema, sourceFreshness: z.enum(["fresh", "stale", "unknown"]), navigationConfirmed: z.literal(false) }).strict(),
+  z.object({ state: z.literal("unavailable"), observedAt: timestampSchema, reason: z.enum(["host_not_configured", "host_changed", "host_unavailable", "service_unavailable", "invalid_response", "snapshot_unavailable", "unsupported_platform", "unknown_thread", "unsupported_thread", "nonlocal_thread", "unknown_desktop_host", "open_failed", "open_outcome_unknown"]) }).strict(),
+]);
+export const openTaskChatResultSchema = z.union([
+  desktopOpenResultSchema,
+  z.object({ state: z.literal("unavailable"), observedAt: timestampSchema, reason: z.enum(["link_unavailable", "link_changed", "task_not_current", "context_not_current", "target_unavailable"]) }).strict(),
+]);
+
 export const lookupInputSchema = z.object({
   requestId: z.string().uuid().regex(/^[a-f0-9-]{36}$/),
 }).strict();
@@ -105,12 +198,17 @@ export const personalOsHostContract = defineRpcContract({
   },
   getMission: { input: missionInputSchema, output: readResultSchema(missionSchema) },
   listTasks: { input: missionInputSchema, output: readResultSchema(taskListSchema) },
+  listInputs: { input: listInputsInputSchema, output: readResultSchema(inputListSchema) },
+  getInput: { input: getInputInputSchema, output: readResultSchema(inputDetailResponseSchema) },
+  getInputArtifact: { input: inputArtifactInputSchema, output: readResultSchema(inputArtifactSchema) },
+  getTaskChat: { input: taskChatInputSchema, output: readResultSchema(taskChatSchema) },
   submitInput: { input: submitInputSchema, output: submissionResultSchema },
 });
 
 export const personalOsContract = defineRpcContract({
   ...personalOsHostContract,
   getInputSubmission: { input: lookupInputSchema, output: submissionLookupResultSchema },
+  openTaskChat: { input: openTaskChatInputSchema, output: openTaskChatResultSchema },
 });
 
 export type PersonalOsContract = typeof personalOsContract;
@@ -123,3 +221,12 @@ export type TasksResult = z.infer<typeof personalOsContract.listTasks.output>;
 export type SubmitInput = z.infer<typeof submitInputSchema>;
 export type SubmissionResult = z.infer<typeof submissionResultSchema>;
 export type SubmissionLookupResult = z.infer<typeof submissionLookupResultSchema>;
+export type ListInputsInput = z.infer<typeof listInputsInputSchema>;
+export type InputItem = z.infer<typeof inputItemSchema>;
+export type InputDetail = z.infer<typeof inputDetailSchema>;
+export type PartialResult = z.infer<typeof partialResultSchema>;
+export type InputsResult = z.infer<typeof personalOsContract.listInputs.output>;
+export type InputDetailResult = z.infer<typeof personalOsContract.getInput.output>;
+export type InputArtifactResult = z.infer<typeof personalOsContract.getInputArtifact.output>;
+export type TaskChatResult = z.infer<typeof personalOsContract.getTaskChat.output>;
+export type OpenTaskChatResult = z.infer<typeof openTaskChatResultSchema>;

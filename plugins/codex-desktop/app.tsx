@@ -6,6 +6,7 @@ import type { CodexDesktopContract, ListThreadsResult, OpenThreadResult, Unavail
 
 const reasonLabels: Record<Unavailable["reason"], string> = {
   host_not_configured: "Выберите Mac в настройках плагина Codex Desktop.",
+  host_changed: "Чат связан с другим Mac. Запрос открытия не отправлен.",
   host_unavailable: "Выбранный Mac недоступен. Список чатов неизвестен.",
   service_unavailable: "Personal OS на Mac недоступна. Повторите чтение позже.",
   invalid_response: "Не удалось подтвердить данные Personal OS.",

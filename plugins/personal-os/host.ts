@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
-import { missionSchema, personalOsHostContract, taskListSourceSchema, type SubmitInput, type SubmissionResult } from "./contract.js";
+import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, type SubmitInput, type SubmissionResult, type InputArtifactResult } from "./contract.js";
 
 const BASE_URL = "http://127.0.0.1:7317";
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -10,7 +11,7 @@ type ReadResult<T> =
   | { state: "available"; observedAt: string; data: T }
   | { state: "unavailable"; observedAt: string; reason: "service_unavailable" | "invalid_response" };
 
-async function responseJson(response: Response, maxBytes: number) {
+async function responseBytes(response: Response, maxBytes: number) {
   const contentType = response.headers.get("content-type")?.split(";")[0].trim();
   const length = response.headers.get("content-length");
   if (contentType !== "application/json" || (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBytes))) {
@@ -39,11 +40,15 @@ async function responseJson(response: Response, maxBytes: number) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  return bytes;
+}
+
+async function responseJson(response: Response, maxBytes: number) {
+  const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await responseBytes(response, maxBytes)));
   return value;
 }
 
-async function read<S extends z.ZodType>(path: string, schema: S, signal: AbortSignal): Promise<ReadResult<z.output<S>>> {
+async function read<S extends z.ZodType>(path: string, schema: S, signal: AbortSignal, maxBytes = MAX_BYTES): Promise<ReadResult<z.output<S>>> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener("abort", abort, { once: true });
@@ -62,10 +67,52 @@ async function read<S extends z.ZodType>(path: string, schema: S, signal: AbortS
       return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
     }
     responseReceived = true;
-    const data = schema.parse(await responseJson(response, MAX_BYTES));
+    const data = schema.parse(await responseJson(response, maxBytes));
     return { state: "available", observedAt: new Date().toISOString(), data };
   } catch {
     return { state: "unavailable", observedAt: new Date().toISOString(), reason: responseReceived && !controller.signal.aborted ? "invalid_response" : "service_unavailable" };
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", abort);
+  }
+}
+
+async function readInput(noteId: string, signal: AbortSignal) {
+  return read("/api/inbox/" + encodeURIComponent(noteId), sourceInputDetailResponseSchema.refine(value => value.item.id === noteId && value.item.results.items.every(result => result.note_id === noteId)), signal, 512 * 1024);
+}
+
+async function readInputArtifact(noteId: string, resultId: string, signal: AbortSignal): Promise<InputArtifactResult> {
+  const detail = await readInput(noteId, signal);
+  if (detail.state !== "available") return detail;
+  if (detail.data.item.results.state !== "available") return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const matches = detail.data.item.results.items.filter(result => result.id === resultId && result.note_id === noteId);
+  if (matches.length !== 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const result = matches[0];
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) controller.abort();
+  const timer = setTimeout(abort, TIMEOUT_MS);
+  let received = false;
+  try {
+    const path = "/api/inbox/" + encodeURIComponent(noteId) + "/results/" + encodeURIComponent(resultId) + "/artifact";
+    const response = await fetch(BASE_URL + path, { method: "GET", redirect: "error", headers: { Accept: "application/json" }, signal: controller.signal });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+    }
+    received = true;
+    const bytes = await responseBytes(response, 512 * 1024);
+    if (bytes.byteLength !== result.artifact.size || createHash("sha256").update(bytes).digest("hex") !== result.artifact.sha256) throw new Error("invalid_response");
+    const report = z.object({ schema_version: z.literal(1), attempt_id: z.literal(result.artifact.aid), result: researchContentSchema, error_code: z.null(), acceptance: z.literal("verification_pending") })
+      .parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+    return { state: "available", observedAt: new Date().toISOString(), data: {
+      noteId, resultId, candidateId: result.candidate_id,
+      artifact: { name: result.artifact.name, sha256: result.artifact.sha256, size: result.artifact.size }, content: report.result,
+      review: result.review, noteCurrent: result.note_current, candidateCurrent: result.candidate_current, integrity: "sha256_verified",
+    } };
+  } catch {
+    return { state: "unavailable", observedAt: new Date().toISOString(), reason: received && !controller.signal.aborted ? "invalid_response" : "service_unavailable" };
   } finally {
     clearTimeout(timer);
     signal.removeEventListener("abort", abort);
@@ -130,6 +177,16 @@ export default experimental_defineHostEntry({
     },
     listTasks(input, context) {
       return read("/api/tasks?mission_id=" + encodeURIComponent(input.missionId), taskListSourceSchema.refine(tasks => tasks.mission_id === input.missionId && tasks.items.every(task => task.mission_id === input.missionId)), context.signal);
+    },
+    listInputs(input, context) {
+      const missionId = input.scope === "mission" ? input.missionId : null;
+      const path = "/api/inbox?scope=" + input.scope + (missionId ? "&mission_id=" + encodeURIComponent(missionId) : "") + "&limit=20";
+      return read(path, sourceInputListSchema.refine(value => value.scope === input.scope && value.mission_id === missionId && value.items.every(item => item.mission_id === missionId && (input.scope !== "personal" || (item.project_id === null && item.mission_link_state === "unlinked")) && item.results.items.every(result => result.note_id === item.id))), context.signal, 1024 * 1024);
+    },
+    getInput(input, context) { return readInput(input.noteId, context.signal); },
+    getInputArtifact(input, context) { return readInputArtifact(input.noteId, input.resultId, context.signal); },
+    getTaskChat(input, context) {
+      return read("/api/task-chat-links?task_id=" + encodeURIComponent(input.taskId), taskChatSchema.refine(value => value.task_id === input.taskId), context.signal, 65536);
     },
     submitInput(input, context) {
       return submit(input, context.signal);

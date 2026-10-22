@@ -9,6 +9,11 @@ Use the plugin's typed CLI rather than reading Personal OS SQLite or copying tas
 bb personal-os missions
 bb personal-os mission <mission_id>
 bb personal-os tasks <mission_id>
+bb personal-os inputs
+bb personal-os inputs <mission_id>
+bb personal-os input <note_id>
+bb personal-os input-artifact <note_id> <input_result_id>
+bb personal-os task-chat <task_id>
 ```
 
 Choose the exact mission ID returned by `missions`. Responses are JSON. Exit code 2 means unavailable,
@@ -18,6 +23,25 @@ the returned items. The plugin has no background refresh: `observedAt` is API re
 Keep `doing`, an agent's report, and accepted work separate. A historical `done` does not count as current
 completion. Applied skills and evidence counts are recorded claims, not independent inspection.
 Mission and task reads are separate observations; do not claim one atomic snapshot.
+
+Personal instructions are separate from goal-bound instructions. Read a note's original plan and
+partial results through `input`; do not reconstruct them from chat summaries. `input-artifact`
+verifies exact attachment bytes and projects structured text with that result's scoped review.
+Hash verification is not product acceptance. A triage plan is proposed work, not execution. Its
+mission-version flag is an audit comparison, not a semantic quality verdict.
+
+Only when the user explicitly asks to open the task's linked chat, first read `task-chat` and use
+the displayed monotonic link version:
+
+```sh
+bb personal-os open-task-chat <task_id> <expected-link-version>
+```
+
+The server rereads the owner binding and delegates to the existing Codex Desktop opener with an
+expected-host constraint. Never infer a Desktop UUID from a BB/provider ID, title or directory.
+Stale observations are not live activity. Opening acts on the configured Mac, including requests
+from a phone. `open_requested` does not confirm the visible destination; unknown outcomes require
+inspection before another explicit request. Opening does not create a chat or send a message.
 
 Reading is the default. Only when the user explicitly asks to save an instruction, use:
 
@@ -49,6 +73,7 @@ If the host is unconfigured, show the missing setup. For explicit setup, an oper
 enrolled Mac host ID with `bb plugin config personal-os set hostId <host_id>`. Never choose another host
 or expose port7317 merely to make a read succeed. Further setup and limits are in [the plugin README](../../README.md).
 
-The plugin can save owner input, but cannot start agents, edit goal/task status, answer decisions, change priorities, or open a Codex Desktop
-chat. Read operations do not grant those actions. Personal OS owns user-goal acceptance; AiweApps owns
+The plugin can save owner input and explicitly request opening an owner-bound Desktop chat, but cannot
+start agents, edit goal/task status, answer decisions or change priorities. Read operations do not grant
+those actions. Personal OS owns user-goal acceptance; AiweApps owns
 domain quality and acceptance of its product delivery.

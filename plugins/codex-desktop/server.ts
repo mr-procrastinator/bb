@@ -32,8 +32,9 @@ export default function plugin(bb: BbPluginApi) {
     async openThread(input) {
       const current = await settings.get();
       if (!current.hostId) return unavailable("host_not_configured");
+      if (input.expectedHostId !== undefined && input.expectedHostId !== current.hostId) return unavailable("host_changed");
       try {
-        return await host.call("openThread", input, { hostId: current.hostId, timeoutMs: 15000 });
+        return await host.call("openThread", { threadId: input.threadId }, { hostId: current.hostId, timeoutMs: 15000 });
       } catch {
         return unavailable("open_outcome_unknown");
       }

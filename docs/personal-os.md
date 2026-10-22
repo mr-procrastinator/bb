@@ -2,8 +2,9 @@
 
 Baseline: upstream `26de548d5454614e3957960eb8a83b7ead33e781`, 22 October 2026.
 Fork: https://github.com/mr-procrastinator/bb. Origin is the fork; upstream remains get-bb/bb.
-The local fork runs with the Personal OS panel, bounded owner input and an explicit Codex Desktop
-chat opener. Codex and Claude native login health is ready. No BB model turn has been run.
+The local fork runs with the Personal OS panel, bounded owner input, saved instruction/result pages
+and an explicit Codex Desktop chat opener. Task links belong to Personal OS and pin the task version,
+semantic context and observed Desktop UUID. Codex and Claude native login health is ready. No BB model turn has been run.
 Phone access and an AiweApps execution adapter remain unverified or unimplemented.
 
 ## Ownership
@@ -13,9 +14,10 @@ flowchart LR
   Phone[Phone or desktop BB] --> Plugin[Personal OS plugin]
   Plugin --> Host[Explicitly selected local host]
   Host --> OS[Personal OS API on loopback]
+  Plugin --> Opener[Codex Desktop plugin]
+  Opener --> Codex[Observed local Codex Desktop chat]
   OS --> Aiwe[AiweApps execution owner]
   Aiwe -. future adapter .-> BB[BB threads and providers]
-  BB -. explicit handoff .-> Codex[Codex Desktop]
 ```
 
 Personal OS keeps user goals, priorities, goal requirements, decisions, received exact artifacts,
@@ -53,9 +55,9 @@ execution is added. Detailed limits live in `plugins/personal-os/README.md`.
 | Claude and other agents | Codex and Claude installed, enabled and native-login health ready; thread limits configured | No BB model turn observed; other ACP providers are separate; native nested agents are outside the BB thread counter |
 | Phone | Responsive web UI, native mobile shell, pairing, voice pipeline | Configure authenticated HTTPS access; a cloned fork does not make the Mac reachable |
 | Codex Desktop | Dedicated local snapshot list/search and allowlisted opener; one known chat opened and title matched | No automatic BB/provider/Desktop ID mapping; stale snapshots and absent chats remain bounded by the source |
-| Personal OS panel | Goal/task reads and bounded owner input through typed host RPC/CLI; exact retry ledger | No Tasks mirror, task-status writes or execution dispatch; pending drafts are browser-local |
+| Personal OS panel | Goal/task/instruction/result reads and bounded owner input through typed host RPC/CLI; exact retry ledger | No Tasks mirror, task-status writes or execution dispatch; pending drafts are browser-local |
 | AiweApps adapter | BB thread creation, sending, events and stop APIs | Durable operation identity and exact stop/result receipts before native resource release |
-| History and recovery | SQLite, plugin databases, thread storage, owned local runtime manager and exact input retry | Full stop/restart verification is still in progress; keep consistent backups and exact artifacts outside pruned tool output |
+| History and recovery | SQLite, plugin databases, thread storage, controlled owned-runtime restart and exact input retry verified | Active-provider crash recovery remains open; keep consistent backups and exact artifacts outside pruned tool output |
 | Independent acceptance | Local board, bounded input retry and one Desktop opening observed | Full runtime recovery, provider execution and phone access remain separate acceptance steps |
 
 Relevant owners: `plugins/account-pool`, `plugins/provider-codex`, `plugins/provider-claude-code`,
@@ -227,3 +229,22 @@ bytes. No active process or worktree used it. The correct shared cache and user 
 The bundled skill metadata validator could not run because both available Python environments lack
 PyYAML. Its small frontmatter and references were inspected directly; no behavioral skill evaluation
 is claimed. Agents can discover the plugin's read commands through its shipped skill.
+
+The instruction/result extension passed targeted Turbo typecheck and builds. The host read a real
+attached research file, checked its exact size/SHA-256, and returned bounded structured text. Chrome
+showed the original instruction, saved plan, partial result and full research on separate pages.
+Reload retained the saved record. A real task binding was read through Personal OS; the task button
+changed the native Codex window to the exact selected chat. An unlinked task showed that absence.
+The general opener response still does not claim automatic window confirmation.
+
+A live route regression was found and fixed: InputList and MissionBoard shared the same sibling key.
+Board → task → back duplicated the instruction list. Distinct key prefixes fixed that same flow:
+zero lists on task detail and one after returning. The reproduction screenshot remains outside Git.
+Draft transport, immutable migrations and prior instructions were preserved.
+
+A new BB goal instruction then passed Personal OS's explicitly enabled one-job research policy:
+background triage published one typed task; the existing native runner produced one file; a separate
+reviewer recorded a scoped review; the result was attached to that same instruction and displayed
+inside BB. No BB provider model turn was used. This proves the bounded Personal OS path, not the future
+AiweApps→BB execution adapter, phone access, full crash recovery or product acceptance. Research text
+is labelled as conclusions from its supplied snapshot, not current system status.

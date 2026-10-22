@@ -2,7 +2,10 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
 export const threadIdSchema = z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i).transform(value => value.toLowerCase());
-export const openThreadInputSchema = z.object({ threadId: threadIdSchema }).strict();
+export const openThreadInputSchema = z.object({
+  threadId: threadIdSchema,
+  expectedHostId: z.string().min(1).max(200).refine(value => value === value.trim()).optional(),
+}).strict();
 export const freshnessSchema = z.enum(["fresh", "stale", "unknown"]);
 const timestampSchema = z.iso.datetime({ offset: true });
 
@@ -20,7 +23,7 @@ export const unavailableSchema = z.object({
   state: z.literal("unavailable"),
   observedAt: timestampSchema,
   reason: z.enum([
-    "host_not_configured", "host_unavailable", "service_unavailable", "invalid_response",
+    "host_not_configured", "host_changed", "host_unavailable", "service_unavailable", "invalid_response",
     "snapshot_unavailable", "unsupported_platform", "unknown_thread", "unsupported_thread",
     "nonlocal_thread", "unknown_desktop_host", "open_failed", "open_outcome_unknown",
   ]),
