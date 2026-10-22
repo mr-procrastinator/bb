@@ -1,7 +1,7 @@
 # Personal OS fork: owner rules
 
 - Automated tests are forbidden unless the owner separately and explicitly requests end-to-end tests. Do not add, edit, delete, or run tests by default. This applies to delegated agents too. Use source review, builds, and manual user flows.
-- Work on the current branch. Do not create branches or push changes without an explicit owner request.
+- Work on the current branch. Do not create branches without an explicit owner request. Publishing to the owner's fork follows the scope of the owner's task.
 - Preserve upstream behavior, existing data, credentials, and unfinished work. Keep fork changes in plugins where supported.
 - Personal OS owns user goals, priorities, goal requirements, decisions, received exact results, consumer inspection, and goal acceptance. AiweApps owns product requirements, the product plan, execution, resource reservations, and domain quality/acceptance of its delivery. BB owns its conversations and provider sessions.
 - Do not create a second writer or dispatcher by mirroring Personal OS tasks into BB Tasks. A reported result or idle chat is not accepted work.

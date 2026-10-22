@@ -134,8 +134,9 @@ returned the literal unsupported flag plus `.git` with exit0. React compiler cac
 created under an invalid newline-containing directory in apps/app. `vite-react-compiler.ts` now uses
 `--git-common-dir` and resolves it relative to the repository root. Both Git2.23 and2.53 returned the
 same correct cache path; rebuilding under2.23 actually created it. Daemon worker hashes stayed unchanged.
-Cause and before/after evidence are compressed in the isolated runtime. The erroneous generated cache
-is removed only after the source checkpoint is committed; no user cache is included in that cleanup.
+Cause and before/after evidence are compressed in the isolated runtime. After source checkpoint
+`4cedf3208` was committed, only the erroneous generated directory was removed: 38,850,560 allocated
+bytes. No active process or worktree used it. The correct shared cache and user caches were retained.
 
 The bundled skill metadata validator could not run because both available Python environments lack
 PyYAML. Its small frontmatter and references were inspected directly; no behavioral skill evaluation
