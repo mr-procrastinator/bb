@@ -60,13 +60,57 @@ export function readResultSchema<S extends z.ZodType>(schema: S) {
   ]);
 }
 
-export const personalOsContract = defineRpcContract({
+export const lookupInputSchema = z.object({
+  requestId: z.string().uuid().regex(/^[a-f0-9-]{36}$/),
+}).strict();
+
+export const submitInputSchema = lookupInputSchema.extend({
+  text: z.string().min(1).max(20000).refine(value => value.trim().length > 0 && !value.includes("\0")),
+  target: z.discriminatedUnion("scope", [
+    z.object({ scope: z.literal("personal") }).strict(),
+    z.object({ scope: z.literal("mission"), missionId: missionIdSchema, expectedMissionVersion: z.number().int().positive() }).strict(),
+  ]),
+}).strict();
+
+const submissionIdentity = {
+  requestId: lookupInputSchema.shape.requestId,
+  observedAt: z.string().datetime(),
+};
+
+export const submissionResultSchema = z.discriminatedUnion("state", [
+  z.object({
+    ...submissionIdentity,
+    state: z.literal("saved"),
+    noteId: z.string().regex(/^note_[a-f0-9]{32}$/),
+    noteVersion: z.literal(1),
+    receiptState: z.literal("new"),
+    missionId: missionIdSchema.nullable(),
+    missionVersion: z.number().int().positive().nullable(),
+  }).strict(),
+  z.object({ ...submissionIdentity, state: z.literal("outcome_unknown"), reason: z.enum(["host_unavailable", "service_unavailable", "invalid_response", "storage_unavailable", "delivery_unconfirmed"]) }).strict(),
+  z.object({ ...submissionIdentity, state: z.literal("blocked"), reason: z.enum(["host_changed", "request_mismatch", "host_not_configured"]) }).strict(),
+  z.object({ ...submissionIdentity, state: z.literal("not_sent"), reason: z.literal("host_not_configured") }).strict(),
+  z.object({ ...submissionIdentity, state: z.literal("rejected"), reason: z.enum(["version_conflict", "idempotency_conflict", "source_rejected"]) }).strict(),
+]);
+
+export const submissionLookupResultSchema = z.union([
+  submissionResultSchema,
+  z.object({ ...submissionIdentity, state: z.literal("not_found") }).strict(),
+]);
+
+export const personalOsHostContract = defineRpcContract({
   listMissions: {
     input: z.null(),
     output: readResultSchema(z.object({ missions: z.array(missionSchema).max(100) }).strict()),
   },
   getMission: { input: missionInputSchema, output: readResultSchema(missionSchema) },
   listTasks: { input: missionInputSchema, output: readResultSchema(taskListSchema) },
+  submitInput: { input: submitInputSchema, output: submissionResultSchema },
+});
+
+export const personalOsContract = defineRpcContract({
+  ...personalOsHostContract,
+  getInputSubmission: { input: lookupInputSchema, output: submissionLookupResultSchema },
 });
 
 export type PersonalOsContract = typeof personalOsContract;
@@ -76,3 +120,6 @@ export type TaskList = z.infer<typeof taskListSchema>;
 export type MissionsResult = z.infer<typeof personalOsContract.listMissions.output>;
 export type MissionResult = z.infer<typeof personalOsContract.getMission.output>;
 export type TasksResult = z.infer<typeof personalOsContract.listTasks.output>;
+export type SubmitInput = z.infer<typeof submitInputSchema>;
+export type SubmissionResult = z.infer<typeof submissionResultSchema>;
+export type SubmissionLookupResult = z.infer<typeof submissionLookupResultSchema>;

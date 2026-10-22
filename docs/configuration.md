@@ -1023,8 +1023,18 @@ The local `personal-os` plugin has one setting, `hostId`: the exact enrolled BB 
 running Personal OS at loopback port7317. Configure it with
 `bb plugin config personal-os set hostId <host_id>`, then reload the plugin. The browser cannot choose
 an arbitrary host or URL. An unset or unavailable host produces an unavailable result, not an empty list.
-The plugin only reads goals and tasks. See [its README](../plugins/personal-os/README.md) for CLI commands
-and limits. Installation does not enable providers, mobile access, or an AiweApps execution adapter.
+The plugin reads goals/tasks and saves explicit plain-text input to the personal inbox or an exact goal
+version. It stores immutable command intents before contacting the selected host. Unknown outcomes retain
+their request UUID, text, target and host; changing the host blocks an unresolved request. See
+[its README](../plugins/personal-os/README.md) for CLI commands, Web Locks support and recovery limits.
+Installation does not enable providers, mobile access, or an AiweApps execution adapter.
+
+The separate `codex-desktop` plugin has its own `hostId` setting:
+`bb plugin config codex-desktop set hostId <host_id>`. Choose the enrolled Mac running both Personal OS
+and Codex Desktop, then reload the plugin. Its sidebar panel searches observed local chats;
+`bb codex-desktop chats` and `bb codex-desktop open <desktop_uuid>` use the same typed path.
+Opening rechecks the saved owner observation and asks that Mac to open a fixed Codex deep link.
+It does not map BB/provider IDs automatically or create/send chats. See [its README](../plugins/codex-desktop/README.md).
 
 ### Workflows plugin
 

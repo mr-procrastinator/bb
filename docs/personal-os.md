@@ -2,7 +2,9 @@
 
 Baseline: upstream `26de548d5454614e3957960eb8a83b7ead33e781`, 22 October 2026.
 Fork: https://github.com/mr-procrastinator/bb. Origin is the fork; upstream remains get-bb/bb.
-The fork exists. Provider login, remote access, and execution integration are not activated.
+The local fork runs with the Personal OS panel, bounded owner input and an explicit Codex Desktop
+chat opener. Codex and Claude native login health is ready. No BB model turn has been run.
+Phone access and an AiweApps execution adapter remain unverified or unimplemented.
 
 ## Ownership
 
@@ -20,35 +22,44 @@ Personal OS keeps user goals, priorities, goal requirements, decisions, received
 consumer inspection, and acceptance of the overall goal. AiweApps keeps product requirements,
 the product plan, one dispatch owner, budgets, resource fences, and domain quality/acceptance of its delivery.
 BB keeps its conversations, environments, and provider sessions. Tasks is not a second editable copy
-of Personal OS tasks. The Personal OS plugin reads existing owner APIs, without model execution.
+of Personal OS tasks. The Personal OS plugin reads existing owner APIs and sends bounded owner input,
+without model execution. Its command ledger records transport recovery, not another task database.
 
 ## First implementation
 
 `plugins/personal-os` is the first bounded code slice. UI and CLI use typed server RPC, which calls
 the configured host entry. Only the host reads `http://127.0.0.1:7317`, so a future cloud BB server
 does not mistake its own localhost for the user's Mac. No public Personal OS port or browser credentials.
-Only explicit GET paths are allowed; no arbitrary URL, redirects, methods, or browser-selected host.
+Reads use only the three documented goal/task GET paths. Bounded text input uses only the existing
+personal-inbox or pinned-goal input POST. There is no arbitrary URL, redirect or browser-selected host.
 `/api/control` is excluded: its skill catalog snapshot can write skill-version observations.
 
 Show mission selection, actual tasks by state, and task details. Unknown and disconnected sources
 are visible, not empty successful results. `doing` is a saved task status, not proof of a live process.
 CLI reads use the same typed path as the panel. A build is not UI or product acceptance.
 
+Owner input fixes one UUID, exact text, target, goal version and enrolled host before delivery.
+The plugin stores that command before contacting Personal OS. Retry reuses it and the owner's
+idempotency key; an uncertain outcome does not create a new UUID. The browser preserves its draft
+and pending request across reload, without automatic submission. General input stays in the personal
+inbox. Goal input requires the explicit goal/version. No task-status write, dispatch or automatic
+execution is added. Detailed limits live in `plugins/personal-os/README.md`.
+
 ## Eight reviewed directions
 
 | Direction | Existing capability | Remaining integration |
 | --- | --- | --- |
 | Multiple Codex accounts | Experimental Account Pooler, separate OAuth entries, ordered failover | A fixed account per chat and separate CODEX_HOME profiles are not implemented by the pool |
-| Claude and other agents | First-party Claude provider and ACP adapters | Verify the existing local login and set bounded concurrency; native nested agents are outside the BB thread counter |
+| Claude and other agents | Codex and Claude installed, enabled and native-login health ready; thread limits configured | No BB model turn observed; other ACP providers are separate; native nested agents are outside the BB thread counter |
 | Phone | Responsive web UI, native mobile shell, pairing, voice pipeline | Configure authenticated HTTPS access; a cloned fork does not make the Mac reachable |
-| Codex Desktop | Generic local app opener; Codex has deep links | Explicit chat mapping and a supported opener; BB currently restricts external URL schemes |
-| Personal OS panel | Plugin SDK supports nav panels, typed host RPC and CLI | Read-only panel first; no Tasks mirror or second task database |
+| Codex Desktop | Dedicated local snapshot list/search and allowlisted opener; one known chat opened and title matched | No automatic BB/provider/Desktop ID mapping; stale snapshots and absent chats remain bounded by the source |
+| Personal OS panel | Goal/task reads and bounded owner input through typed host RPC/CLI; exact retry ledger | No Tasks mirror, task-status writes or execution dispatch; pending drafts are browser-local |
 | AiweApps adapter | BB thread creation, sending, events and stop APIs | Durable operation identity and exact stop/result receipts before native resource release |
-| History and recovery | SQLite, plugin databases, thread storage, provider resume | Consistent backup and exact artifact retention outside pruned BB tool output |
-| Independent acceptance | Source boundaries reviewed | Manual local flow, repeat open, account identity, recovery, and phone access remain separate observations |
+| History and recovery | SQLite, plugin databases, thread storage, owned local runtime manager and exact input retry | Full stop/restart verification is still in progress; keep consistent backups and exact artifacts outside pruned tool output |
+| Independent acceptance | Local board, bounded input retry and one Desktop opening observed | Full runtime recovery, provider execution and phone access remain separate acceptance steps |
 
 Relevant owners: `plugins/account-pool`, `plugins/provider-codex`, `plugins/provider-claude-code`,
-`plugins/concurrency-limit`, `apps/mobile`, `apps/connect`, `packages/plugin-sdk`,
+`plugins/concurrency-limit`, `plugins/personal-os`, `plugins/codex-desktop`, `apps/mobile`, `apps/connect`, `packages/plugin-sdk`,
 `packages/server-contract/src/api/threads.ts`, and `packages/db/src/retained-event-output.ts`.
 
 ## Important contracts before dispatch
@@ -70,11 +81,60 @@ Backups must include BB's SQLite database, plugin databases, thread storage, and
 
 ## Runtime and update boundary
 
-Use an explicit, separate `--data-dir` for a persistent pilot. Never reuse `~/.bb` or the Personal OS
-runtime. `pnpm dev` and `start:worktree` compute their own checkout-specific dev directory; they are not
-the persistent pilot directory merely because `BB_DATA_DIR` was exported.
-Keep automatic in-app updates off for the pilot. Take a consistent snapshot before accepting upstream
-migrations. Existing data must not be reset to make a new build start.
+The local runtime manager is `scripts/personal-os-runtime.mjs`. It owns only processes that it starts.
+It uses the fixed isolated directory `~/.local/share/bb-personal-os`, server7319 and daemon7320 on
+loopback. It does not enroll a host, copy authentication, enable providers, build, update, reset,
+or install a login service. Setup is explicit and separate from ordinary start:
+
+```sh
+node scripts/personal-os-runtime.mjs setup
+node scripts/personal-os-runtime.mjs status
+node scripts/personal-os-runtime.mjs start
+node scripts/personal-os-runtime.mjs stop
+```
+
+Setup defaults to Codex's bundled Node at
+`~/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`.
+Use `setup --node /absolute/path/to/node` to select it explicitly. Setup records its resolved path;
+it requires Node24/ABI137. Repeating setup with a different checkout or Node path refuses to overwrite
+the saved configuration. Commands can be invoked by another Node version, but the managed processes
+always use the recorded Node24. Start checks required build outputs and loads the existing native
+SQLite addon without opening a database. Missing builds or a different native ABI fail before launch.
+
+Start requires existing nonempty `bb.db`, `auth.json`, and `host-id`. It checks their metadata and
+reads only the public `host-id`, never authentication contents. Initial enrollment remains a separate explicit installation
+step. Server startup still runs BB's own migrations and maintenance. Existing queued work and provider
+configuration remain owned by BB; starting the server is not a promise that those existing workflows
+cannot resume. Provider enablement remains an explicit BB configuration action; the manager does not
+change it. Codex and Claude are currently enabled with native-login health ready; no model turn is claimed.
+
+The manager pins the native user's home and strips inherited alternate provider profiles, BB routing,
+account-pool variables, API-key/token/base-URL/FD overrides for Claude/Codex, and standard custom-provider
+overrides from its child environment. It does not alter
+the environment of any existing process or provider-native files. This avoids inherited paid-API
+fallback; it does not inspect or change credentials already stored by BB or a native provider.
+Telemetry is false. Direct server/daemon entries have no packaged update shim or daemon auto-updater.
+
+Each start creates a detached supervisor, durable PID records and separate gzip stdout/stderr logs
+for that run under `runtime-manager/`. There is no uncompressed log duplicate. The supervisor remains
+after the invoking chat exits. After a computer restart, run `start` again; automatic login startup
+is not installed. If either managed service exits, the supervisor stops its own peer and records the
+failure. No unbounded restart loop is installed. Compressed logs are finalized on orderly shutdown;
+an abrupt power loss may leave the latest gzip member without its footer.
+
+Stop requires the saved PID, UID, process start time, exact executable/entry arguments and unique
+owner marker to still match. It sends SIGTERM only to those exact owned processes and never adopts
+or kills an occupied port. No force kill is used. A manually launched existing pilot is reported as an
+unmanaged listener and is left running. `ownedListener` checks that the saved PID owns the port.
+`ready` also requires server `/health` or daemon `/status` with `connected: true` and the saved public
+host ID. These checks do not establish plugin or product acceptance.
+If an interrupted `start` leaves `runtime-manager/launch.lock`, inspect its saved owner and `status`
+before removing only that manager lock. Do not remove BB's daemon lock, auth, database or user data.
+
+Never reuse `~/.bb` or the Personal OS runtime. `pnpm dev` and `start:worktree` compute their own
+checkout-specific directory; they are not this persistent pilot merely because `BB_DATA_DIR` was
+exported. Take a consistent snapshot before accepting upstream migrations. Existing data must not
+be reset to make a new build start. The manager has no rollback or data-migration command.
 
 Default local APIs rely on loopback trust and can execute commands/read files. For a phone use the
 existing authenticated BB Connect path or a deliberately configured private HTTPS boundary. Protect
@@ -83,16 +143,17 @@ both HTTP and WebSocket; do not use a wildcard bind as authentication.
 ## Current verification
 
 Fork identity and parent, local clone, upstream remote, and clean baseline were observed.
-Eight independent source reviews produced the boundaries above. They did not log in, copy credentials,
-start providers, expose ports, or run tests. The first plugin build passed both Turbo typecheck and prepare:bundled (9 successful tasks).
+Eight independent source reviews produced the boundaries above. Those source-only reviews did not
+log in, copy credentials, start providers, expose ports, or run tests. The first plugin build passed
+both Turbo typecheck and prepare:bundled (9 successful tasks).
 The dry execution graph contained build/generate/typecheck tasks, no test tasks. Generated artifacts
 remain ignored. Only the plugin dependency closure and app-side build dependencies were installed;
 root install scripts were not run. The lockfile preserves upstream entries and adds the plugin importer.
 
-A manual call to the built host entry read the live loopback Personal OS APIs: missions, the selected
-active mission, and 11 tasks (3 doing, 3 todo, 1 blocked, 4 done). Public fields exclude raw evidence
-locators, workspace and context/history payloads. This verifies the host reader against real data;
-it does not prove BB server RPC, CLI routing, installation, phone access, or the BB panel UI.
+A first manual call to the built host entry read the live loopback Personal OS APIs: missions, the
+selected active mission, and 11 tasks (3 doing, 3 todo, 1 blocked, 4 done). Public fields exclude raw
+evidence locators, workspace and context/history payloads. That initial observation covered only the
+host reader; the later server/CLI/UI observations are recorded below. Phone access remains unverified.
 Private evidence is stored outside checkout as compressed plugin-build-final and plugin-live-host
 records. The SDK build also passed. No provider model or automated test was run.
 
@@ -107,10 +168,12 @@ for a different supported Node version.
 
 ## Observed local pilot
 
-The fork is running on loopback `http://127.0.0.1:7319`, with one local host daemon on7320 and its own
-data directory. The new host is enrolled only in this fork instance. Existing provider auth files were
-not copied. Telemetry is disabled; this direct source runtime does not run the packaged update shim.
-This is a manual local launch, not confirmed login-startup or a24/7 service.
+The fork runs on loopback `http://127.0.0.1:7319`, with one local host daemon on7320 and its own
+data directory. The host is enrolled only in this fork instance. Existing provider auth files were
+not copied. Telemetry is disabled; the direct source runtime does not run the packaged update shim.
+The operator completed explicit manager setup, stopped the prior manual processes and started the
+manager-owned pair. Both processes had exact ownership and ready checks. A later full manager
+stop/restart verification is still in progress; login-startup and24/7 operation are not established.
 
 The Personal OS plugin is installed and running. Real CLI calls went through server RPC and the
 enrolled host to Personal OS. They returned the selected mission and its11original tasks. Server restart
@@ -122,12 +185,35 @@ returned to the board and reopened after reload and rebuilding. The board then s
 A live UI defect was corrected: current Done cards now display their result instead of an obsolete
 next action. The final plugin typecheck/build passed. Private screenshot:
 `evidence/personal-os-board-20261022.png` in the isolated runtime, outside Git.
-No provider model or automated test was run. Native mobile and remote access remain unverified.
+No BB model turn or automated test was run. Native mobile and remote access remain unverified.
 
-Global and local-host BB thread limits are8. This does not bound native nested provider agents;
-configure those before enabling model execution. Providers, account/connect services, automation and
-unprepared optional plugins remain disabled in this new pilot instance. This avoids presenting them
-as working connections. Claude/Codex bundles exist; their actual login and model readiness are separate.
+The input flow was exercised in Chrome. A draft survived reload. The first submission then reported
+`storage_unavailable`: the installed ledger had already applied migration0 with its original hash,
+but the changed source tried to replace that statement. The fix restored immutable migration0 and
+appended migration1. The same pending request was retried and saved exactly one new Personal OS note.
+The five existing inbox entries stayed unchanged; the inbox then contained six entries. The new note
+was subsequently triaged to `planned`; that state does not mean its requested work was executed.
+The plugin still calls the real Personal OS owners and does not relocate or replace their database.
+
+Global and local-host BB thread limits are 8. Codex 0.153.4 and Claude 2.1.308 are installed, enabled and
+reported ready by provider health. The native Claude CLI reports Team. A plan-label projection defect
+was corrected; BB health then also reported Team. These observations do not prove a successful BB
+model turn, and none was run. Native memory, provider subagents and BB Workflows remain off.
+The thread counter does not itself bound native nested agents. Account/Connect services, automation
+and unprepared optional plugins remain disabled; phone access is not presented as connected.
+
+The Codex Desktop plugin's list RPC projected 65 local chats and explicitly omitted 29 unsupported
+source rows. Search was available over the loaded list. In Chrome, the operator selected a known
+chat and used the explicit opener. The native Codex window then showed that exact chat title.
+This confirms that observed navigation only. The general opener receipt still says `open_requested`
+with `navigationConfirmed:false`; there is no automatic BB-thread/provider-session/Desktop mapping,
+message forwarding, Desktop resume or phone-side Codex execution.
+
+The manager subsequently completed `stop` and `start`: both owned listeners disappeared, then both
+services became healthy with the same enrolled host. The existing input command and exact saved
+receipt survived; its command count remained one. Both finalized logs from the stopped run were
+read successfully as gzip. This verifies a controlled restart, not recovery from a crash while a
+provider model runs. Proof: `evidence/runtime-restart-proof-20261022.json.gz` outside checkout.
 
 The first build also exposed a cache-path bug under Git2.23: `rev-parse --path-format=absolute`
 returned the literal unsupported flag plus `.git` with exit0. React compiler cache was consequently

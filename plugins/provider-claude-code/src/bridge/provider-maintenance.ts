@@ -342,12 +342,13 @@ async function readAccountEmail(): Promise<string | null> {
 }
 
 function planLabel(credentials: ClaudeCredentials): string | null {
-  const maxMatch = (credentials.rateLimitTier ?? "").match(/max_(\d+)x/u);
-  if (maxMatch) return `Max (${maxMatch[1]}x)`;
-  const subscription = credentials.subscriptionType;
-  return subscription
-    ? subscription.charAt(0).toUpperCase() + subscription.slice(1)
-    : null;
+  const subscription = credentials.subscriptionType?.trim().toLowerCase();
+  if (!subscription) return null;
+  if (subscription === "max") {
+    const maxMatch = (credentials.rateLimitTier ?? "").match(/max_(\d+)x/u);
+    if (maxMatch) return `Max (${maxMatch[1]}x)`;
+  }
+  return subscription.charAt(0).toUpperCase() + subscription.slice(1);
 }
 
 function healthResult(

@@ -9,8 +9,12 @@
 # bb
 
 This is the [Personal OS fork](https://github.com/mr-procrastinator/bb) of get-bb/bb.
-The first integration is a read-only Personal OS plugin. Accounts, mobile access, and an AiweApps execution adapter are separate work; they are not enabled by cloning this repository.
+The Personal OS plugin reads goals/tasks and saves explicit owner instructions through the existing Personal OS API. A separate Codex Desktop plugin searches observed local chats and requests opening the exact original chat. Existing Claude/Codex logins are detected in the local pilot; a second account, phone access, and an AiweApps execution adapter remain separate work.
 See [integration architecture and progress](docs/personal-os.md) and [owner rules](.bb/AGENTS.md).
+
+For the already enrolled local pilot, use `node scripts/personal-os-runtime.mjs setup`, then `start`,
+`status` or `stop`. The manager uses the isolated data directory and Node24/ABI137. It does not enroll,
+enable providers or install login startup. The local panel is at `http://127.0.0.1:7319`.
 
 [![npm version](https://img.shields.io/npm/v/bb-app.svg)](https://www.npmjs.com/package/bb-app)
 [![Join Discord](https://img.shields.io/badge/Discord-Join%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/kvBU6tJhcJ)

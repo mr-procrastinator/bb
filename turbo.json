@@ -1556,6 +1556,13 @@
         "$TURBO_ROOT$/packages/plugin-registry/flavors/**"
       ]
     },
+    "bb-plugin-codex-desktop#typecheck": {
+      "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/plugin-registry/flavors/**"
+      ]
+    },
     "bb-plugin-personal-os#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"],
       "inputs": [
