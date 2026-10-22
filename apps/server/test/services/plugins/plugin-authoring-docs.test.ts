@@ -12,6 +12,7 @@ import {
   type PluginContentScriptContext,
   type PluginContentScriptRegistration,
   type PluginDiffRendererProps,
+  type ExperimentalComposerProps,
   type PluginFileOpenerProps,
   type PluginHomepageSectionProps,
   type PluginHttpAuthMode,
@@ -283,6 +284,7 @@ type SlotPropsByName = {
   fileOpener: PluginFileOpenerProps;
   experimental_sourceCodeRenderer: PluginSourceCodeRendererProps;
   experimental_diffRenderer: PluginDiffRendererProps;
+  experimental_composer: ExperimentalComposerProps;
   messageDirective: PluginMessageDirectiveProps;
   experimental_codeFenceRenderer: ExperimentalCodeFenceRendererProps;
   messageAction: PluginMessageActionContext;
@@ -391,6 +393,7 @@ const FRONTEND_SLOT_PROP_FIELDS = {
     "experimental_fullFileContents",
     "Original",
   ],
+  experimental_composer: [],
   messageDirective: ["attributes", "source", "message", "openWorkspaceFile"],
   experimental_codeFenceRenderer: [
     "code",

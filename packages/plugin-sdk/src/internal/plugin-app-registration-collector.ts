@@ -12,6 +12,7 @@ import type {
   PluginAppDefinition,
   PluginContentScriptRegistration,
   PluginDiffRendererRegistration,
+  ExperimentalComposerRegistration,
   PluginEnvironmentProviderInputsRegistration,
   PluginMachineProviderInputsRegistration,
   PluginFileOpenerRegistration,
@@ -278,6 +279,7 @@ export interface CollectedPluginAppRegistrations {
   fileOpeners: PluginFileOpenerRegistration[];
   sourceCodeRenderers: PluginSourceCodeRendererRegistration[];
   diffRenderers: PluginDiffRendererRegistration[];
+  composers: ExperimentalComposerRegistration[];
   messageDirectives: PluginMessageDirectiveRegistration[];
   codeFenceRenderers: ExperimentalCodeFenceRendererRegistration[];
   messageActions: PluginMessageActionRegistration[];
@@ -392,6 +394,7 @@ export function collectPluginAppRegistrations(
     fileOpeners: [],
     sourceCodeRenderers: [],
     diffRenderers: [],
+    composers: [],
     messageDirectives: [],
     codeFenceRenderers: [],
     messageActions: [],
@@ -424,6 +427,7 @@ export function collectPluginAppRegistrations(
     fileOpener: new Set<string>(),
     sourceCodeRenderer: new Set<string>(),
     diffRenderer: new Set<string>(),
+    composer: new Set<string>(),
     messageDirective: new Set<string>(),
     codeFenceRenderer: new Set<string>(),
     codeFenceLanguage: new Set<string>(),
@@ -857,6 +861,15 @@ export function collectPluginAppRegistrations(
           collectTitledComponent(
             "slots.experimental_diffRenderer",
             seenIds.diffRenderer,
+            registration,
+          ),
+        );
+      },
+      experimental_composer(registration) {
+        collected.composers.push(
+          collectTitledComponent(
+            "slots.experimental_composer",
+            seenIds.composer,
             registration,
           ),
         );

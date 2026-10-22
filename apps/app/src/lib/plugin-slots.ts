@@ -5,6 +5,7 @@ import type {
   ExperimentalAppOverlayRegistration,
   ExperimentalCodeFenceRendererRegistration,
   PluginDiffRendererRegistration,
+  ExperimentalComposerRegistration,
   PluginEnvironmentProviderInputsRegistration,
   PluginMachineProviderInputsRegistration,
   PluginPendingInteractionRegistration,
@@ -55,6 +56,7 @@ export interface PluginRegistrationSet {
   fileOpeners: readonly PluginFileOpenerRegistration[];
   sourceCodeRenderers?: readonly PluginSourceCodeRendererRegistration[];
   diffRenderers?: readonly PluginDiffRendererRegistration[];
+  composers?: readonly ExperimentalComposerRegistration[];
   messageDirectives: readonly PluginMessageDirectiveRegistration[];
   codeFenceRenderers?: readonly ExperimentalCodeFenceRendererRegistration[];
   messageActions?: readonly PluginMessageActionRegistration[];
@@ -105,6 +107,8 @@ export interface PluginSourceCodeRendererSlot
   extends PluginSourceCodeRendererRegistration, PluginSlotBase {}
 export interface PluginDiffRendererSlot
   extends PluginDiffRendererRegistration, PluginSlotBase {}
+export interface PluginComposerSlot
+  extends ExperimentalComposerRegistration, PluginSlotBase {}
 export interface PluginMessageDirectiveSlot
   extends PluginMessageDirectiveRegistration, PluginSlotBase {}
 export interface PluginCodeFenceRendererSlot
@@ -141,6 +145,7 @@ export interface PluginSlotSnapshot {
   fileOpeners: readonly PluginFileOpenerSlot[];
   sourceCodeRenderers: readonly PluginSourceCodeRendererSlot[];
   diffRenderers: readonly PluginDiffRendererSlot[];
+  composers: readonly PluginComposerSlot[];
   messageDirectives: readonly PluginMessageDirectiveSlot[];
   codeFenceRenderers: readonly PluginCodeFenceRendererSlot[];
   messageActions: readonly PluginMessageActionSlot[];
@@ -170,6 +175,7 @@ export const EMPTY_PLUGIN_SLOT_SNAPSHOT: PluginSlotSnapshot = {
   fileOpeners: [],
   sourceCodeRenderers: [],
   diffRenderers: [],
+  composers: [],
   messageDirectives: [],
   codeFenceRenderers: [],
   messageActions: [],
@@ -206,6 +212,7 @@ const SLOT_KINDS: readonly SlotKind[] = [
   "fileOpeners",
   "sourceCodeRenderers",
   "diffRenderers",
+  "composers",
   "messageDirectives",
   "codeFenceRenderers",
   "messageActions",
@@ -266,6 +273,7 @@ function flattenRegistrations(
     fileOpeners: stamp(set.fileOpeners),
     sourceCodeRenderers: stamp(set.sourceCodeRenderers),
     diffRenderers: stamp(set.diffRenderers),
+    composers: stamp(set.composers),
     messageDirectives: stamp(set.messageDirectives),
     codeFenceRenderers: stamp(set.codeFenceRenderers),
     messageActions: stamp(set.messageActions),
