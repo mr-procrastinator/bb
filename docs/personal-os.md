@@ -63,9 +63,14 @@ Neither read starts work. A recorded continuation phase describes a saved attemp
 | File action | **Проверить и прочитать** appears only for an exact binding with a received research receipt. `not_rechecked` is permission to ask the owner reader to check the file, not proof that its bytes are currently readable. Missing or unavailable file data supplies no file action. |
 | `TaskResultPage` | Reads that exact task/binding result, including an early file before instruction attachment. The host verifies size and SHA-256 before returning structured text. The page also checks the returned mission/task/binding against its route. Research conclusions describe the supplied material snapshot, not current system status. |
 | Review text | A saved owner review requires its review identity and outcome. Current conclusions additionally require current binding/candidate and applicability. A saved review-run phase alone does not establish a review, task completion or goal acceptance. |
+| Completion grounds | A done task separately resolves its exact artifact receipt and pinned consumer review. A historical execution binding stays historical after the task version changes. The exact file reader also shows these recorded grounds; the previous attempt review moves into history only when an exact current applicable completion review is present. Neither record establishes whole-goal acceptance. |
 | Independent reads | Task ID, mission ID, version and context-current flag must agree between the displayed task and activity. A mismatch displays **Обновите данные задачи** and withholds current labels and file actions. A task-chat link also checks the displayed task version before enabling navigation. |
 | Autostart errors | The current dispatcher error is separate from the saved attempt phase. Past dispatcher errors stay in expandable history; they do not replace the current phase. |
 
+The overview starts with the goal and four task columns. Completed work shows three current cards
+with an explicit expansion of the received list; this order does not claim completion recency.
+The top input action opens and focuses the existing composer. A single plugin scroll viewport covers
+all route content, the composer and recent instructions, inside BB's constrained host pane.
 The composer and recent-instruction list appear only on overview pages. The composer remains mounted
 while hidden on task/instruction/result pages, preserving the draft and pending request. Route keys
 have separate component prefixes; board → task → back must leave one instruction list on the board
@@ -324,3 +329,19 @@ statements described the initial checks; they must not be read as saying no pilo
 A new timeline fix exists in source only. It has not been verified live, and the previously saved
 history remains unrepaired. It must not be presented as recovered history or a successful provider
 result.
+
+### Manual UI checkpoint, 23 October 2026
+
+Root observed the revised board in one Chrome tab: expand 3/8 to 8/8, task/detail/back with
+expansion preserved, and done task → exact research file → attempt history → back. Draft text and
+the explicit goal target survived reload and navigation; root cleared only that manual-check draft
+without submitting new work. The exact 11886-byte research result and pinned review were readable.
+
+Live inspection found two layout defects missed by source review: a flex-shrunk board overlapped
+the composer, and the host overflow boundary clipped long content. Natural board height plus one
+shared scroll viewport fixed both. Wheel scrolling reached the lower composer; the compact board
+main measured 806px instead of 1494px. Build/typecheck passed; no automated tests ran.
+Runtime evidence stays outside Git: `evidence/board-overlap-before-20261023.png`,
+`evidence/board-compact-after-20261023.png`, and
+`evidence/board-completion-manual-20261023.json.gz` under the isolated BB data directory.
+These checks cover the observed desktop routes. Phone, microphone and owner-rated 9/10 remain open.

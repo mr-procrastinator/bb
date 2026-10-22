@@ -53,7 +53,7 @@ function readInputBackups(storageKey: string): InputDraft[] {
   return parsed.data;
 }
 
-function InputComposer({ missionId, onSaved }: { missionId: string | null; onSaved: () => void }) {
+function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }: { missionId: string | null; onSaved: () => void; onStatus: (label: string) => void; openRequest: number; composerId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const pluginId = experimental_usePluginId();
@@ -81,6 +81,7 @@ function InputComposer({ missionId, onSaved }: { missionId: string | null; onSav
   const writeQueue = useRef<Promise<boolean>>(Promise.resolve(true));
   const busyRef = useRef(false);
   const mounted = useRef(true);
+  const composerRef = useRef<HTMLDetailsElement | null>(null);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     let active = true;
@@ -222,12 +223,24 @@ function InputComposer({ missionId, onSaved }: { missionId: string | null; onSav
     }
   };
   const locked = busy || draft.pending !== null || initial.corrupt || conflict || !lockAvailable;
+  const composerLabel = busy ? "Отправка сохраняется…" : draft.pending ? "Проверить отправку" : storageError || initial.corrupt || conflict || !lockAvailable ? "Ввод требует внимания" : draft.text.trim() ? "Продолжить черновик" : backup ? "Сохранённые черновики" : "+ Поручение";
+  useEffect(() => { onStatus(composerLabel); }, [composerLabel, onStatus]);
+  useEffect(() => {
+    const panel = composerRef.current;
+    if (!openRequest || !panel || panel.closest("[hidden]")) return;
+    panel.open = true;
+    panel.scrollIntoView({ block: "start" });
+    const field = panel.querySelector<HTMLTextAreaElement>("textarea:not(:disabled)");
+    const submitButton = panel.querySelector<HTMLButtonElement>('button[type="submit"]:not(:disabled)');
+    (field ?? submitButton ?? panel.querySelector<HTMLElement>("summary"))?.focus();
+  }, [openRequest]);
   const availableMission = mission && mission.id === missionId && !["completed", "cancelled"].includes(mission.state) ? mission : null;
   const selectedMission = draft.target.scope === "mission";
   const sameMission = draft.target.scope === "mission" && availableMission?.id === draft.target.missionId;
   const staleTarget = sameMission && draft.target.scope === "mission" && availableMission?.version !== draft.target.expectedMissionVersion;
-  return <section className="mx-auto w-full max-w-5xl px-4 pt-4 md:px-8 md:pt-8" aria-label="Новое поручение">
-    <form onSubmit={submit} className="space-y-3 rounded-lg border border-border bg-card p-4">
+  return <details ref={composerRef} id={composerId} className="mx-auto w-full max-w-5xl rounded-lg border border-border bg-card">
+    <summary className="cursor-pointer px-4 py-3 text-sm font-medium">{composerLabel}</summary>
+    <form onSubmit={submit} className="space-y-3 border-t border-border p-4" aria-label="Новое поручение">
       <label className="sr-only" htmlFor={fieldId}>Что нужно сделать?</label>
       <Textarea id={fieldId} value={draft.text} maxLength={20000} rows={2} placeholder="Что нужно сделать?" disabled={locked} onChange={event => { void persist({ ...draftRef.current, text: event.target.value }); setNotice(""); }} />
       <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2" role="group" aria-label="Куда добавить поручение">
@@ -250,7 +263,7 @@ function InputComposer({ missionId, onSaved }: { missionId: string | null; onSav
       {notice && <p className="text-xs text-muted-foreground" role="status">{notice}</p>}
       {savedNoteId && <Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + savedNoteId })}>Открыть сохранённое поручение →</Button>}
     </form>
-  </section>;
+  </details>;
 }
 
 function Unavailable({ result }: { result: { reason: keyof typeof unavailableLabels } | null }) {
@@ -340,8 +353,8 @@ function InputList({ missionId, refreshRevision }: { missionId: string | null; r
   const data = result?.state === "available" && result.data.scope === scope && result.data.mission_id === (scope === "mission" ? missionId : null) ? result.data : null;
   const matches = data && data.items.every(note => scope === "mission" ? note.mission_id === missionId && note.mission_link_state === "linked" : note.mission_id === null && note.mission_link_state === "unlinked" && note.project_id === null);
   const items = data && matches ? data.items : null;
-  return <section className="mx-auto w-full max-w-5xl space-y-3 px-4 pt-5 md:px-8" aria-label="Мои поручения">
-    <header className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-base font-semibold">Мои поручения</h2><div className="flex flex-wrap gap-1"><Button type="button" variant={scope === "personal" ? "secondary" : "ghost"} size="sm" aria-pressed={scope === "personal"} onClick={() => setScope("personal")}>Личные</Button>{missionId && <Button type="button" variant={scope === "mission" ? "secondary" : "ghost"} size="sm" aria-pressed={scope === "mission"} onClick={() => setScope("mission")}>Эта цель</Button>}<Button type="button" variant="ghost" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>
+  return <section className="mx-auto w-full max-w-5xl space-y-3 p-4" aria-label="Мои поручения">
+    <header className="flex flex-wrap items-center justify-between gap-2"><h2 className="sr-only">Мои поручения</h2><div className="flex flex-wrap gap-1"><Button type="button" variant={scope === "personal" ? "secondary" : "ghost"} size="sm" aria-pressed={scope === "personal"} onClick={() => setScope("personal")}>Личные</Button>{missionId && <Button type="button" variant={scope === "mission" ? "secondary" : "ghost"} size="sm" aria-pressed={scope === "mission"} onClick={() => setScope("mission")}>Эта цель</Button>}<Button type="button" variant="ghost" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>
     {result === null && !failed && <p className="text-xs text-muted-foreground" role="status">Читаем поручения…</p>}
     {failed || result?.state === "unavailable" || result?.state === "available" && !items ? <p className="text-sm text-muted-foreground" role="status">Поручения прочитать не удалось. Их количество и состояние неизвестны.</p> : null}
     {items && data && <><div className="grid gap-2 md:grid-cols-3">{(expanded ? items : items.slice(0, 3)).map(note => <button type="button" key={note.id} onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + note.id })} className="flex min-w-0 cursor-pointer flex-col items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="line-clamp-2 break-words text-sm font-medium">{inputTitle(note)}</span><span className="mt-auto text-xs text-muted-foreground">{inputStateLabels[note.state]}{partialStatus(note) ? " · " + partialStatus(note) : ""}</span></button>)}</div>{items.length === 0 && <p className="text-sm text-muted-foreground">{scope === "mission" ? "Поручений этой цели нет." : "Личных поручений нет."}</p>}{(items.length > 3 || data.truncated) && <Button type="button" variant="ghost" size="sm" onClick={() => setExpanded(value => !value)}>{expanded ? "Свернуть" : "Все поручения · " + data.total_count}</Button>}{data.truncated && <p className="text-xs text-muted-foreground">Показаны последние {expanded ? items.length : Math.min(3, items.length)} из {data.total_count}. Список неполон.</p>}</>}
@@ -523,6 +536,43 @@ function ExecutionStages({ binding, task }: { binding: TaskExecutionBinding; tas
   return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="grid gap-4 sm:grid-cols-3"><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Исполнение</h3><p className="text-sm">{executionPhaseLabels[binding.continuation.phase] ?? "Фаза неизвестна"}</p></div><div className="space-y-2"><h3 className="text-xs text-muted-foreground">Файл</h3><p className="text-sm">{fileLabel}</p>{hasReceipt && <Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + task.mission_id + "/task/" + task.id + "/result/" + binding.id })}>Проверить и прочитать →</Button>}</div><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Проверка файла</h3><p className="text-sm">{taskReviewLabel(binding.review, currentExecution(binding))}</p></div></div>{binding.input_result.state === "attached" && binding.input_result.note_id && <Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + binding.input_result.note_id })}>Результат добавлен в поручение →</Button>}<p className="text-xs text-muted-foreground">Сохранённые этапы попытки. Они не подтверждают работу процесса сейчас или приёмку цели.</p></section>;
 }
 
+type CompletionItem = TaskActivityItem["completion"]["items"][number];
+function CompletionEvidence({ items, missionId, taskId, contextCurrent, showFiles = true }: { items: CompletionItem[]; missionId: string; taskId: string; contextCurrent: boolean | null; showFiles?: boolean }) {
+  const navigate = useBbNavigate();
+  const files = new Map<string, NonNullable<CompletionItem["artifact"]>>();
+  const reviews = new Map<string, NonNullable<CompletionItem["review"]>>();
+  let recordedOnly = 0;
+  let unavailable = 0;
+  for (const item of items) {
+    if (item.state === "recorded_only") { recordedOnly += 1; continue; }
+    if (item.state !== "resolved") { unavailable += 1; continue; }
+    if (item.artifact) files.set(item.artifact.binding_id, item.artifact);
+    if (item.kind === "consumer_review" && item.review) reviews.set(item.review.id, item.review);
+    if (item.kind === "recorded_source") recordedOnly += 1;
+    if (item.kind === "artifact" && !item.artifact || item.kind === "consumer_review" && !item.review) unavailable += 1;
+  }
+  const outcomes = { no_blocking_findings: "По выбранным требованиям блокирующих замечаний не найдено", changes_required: "По выбранным требованиям нужны исправления", inconclusive: "Для вывода по выбранным требованиям недостаточно данных" };
+  return <div className="space-y-3">
+    {showFiles && [...files.values()].map(file => <div key={file.binding_id} className="flex flex-wrap items-center justify-between gap-3"><div className="space-y-1"><p className="text-sm font-medium">Полученный файл исследования</p><p className="text-xs text-muted-foreground">{file.currentness === "historical" ? "Из прежней попытки" : file.currentness === "current" ? "Из попытки по текущим условиям" : "Актуальность попытки неизвестна"}</p></div><Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId + "/result/" + file.binding_id })}>Проверить и прочитать →</Button></div>)}
+    {[...reviews.values()].map(review => {
+      const applicable = contextCurrent === true && review.candidate_current === true && review.applicable === true;
+      return <section key={review.id} className="space-y-1"><h4 className="text-sm font-medium">Проверка, указанная при завершении</h4><p className="text-sm">{applicable ? outcomes[review.outcome] : "Записанный вывод: " + outcomes[review.outcome]}</p>{!applicable && <p className="text-xs text-muted-foreground">{review.applicable_at_recording ? "Когда проверку сохранили, она была применима. Текущая применимость не подтверждена." : "Применимость проверки к текущим условиям не подтверждена."}</p>}</section>;
+    })}
+    {recordedOnly > 0 && <p className="text-xs text-muted-foreground">Сохранено источников без проверки содержимого в этой проекции: {recordedOnly}.</p>}
+    {unavailable > 0 && <p className="text-xs text-muted-foreground" role="status">Часть записанных оснований прочитать не удалось.</p>}
+  </div>;
+}
+
+function CompletionGrounds({ completion, task }: { completion: TaskActivityItem["completion"]; task: Task }) {
+  if (task.state !== "done") return null;
+  const matches = completion.task_version === task.version && completion.context_current === task.context_current;
+  return <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Основания завершения"><h3 className="text-base font-semibold">Основания отметки «Готово»</h3>{!matches ? <p className="text-sm text-muted-foreground">Обновите данные задачи.</p> : completion.state !== "recorded" ? <p className="text-sm text-muted-foreground">Сведения об основаниях прочитать не удалось.</p> : <>
+    {task.completion_current !== true && <p className="text-xs text-muted-foreground">Актуальность отметки завершения при текущих условиях не подтверждена.</p>}
+    {completion.items.length > 0 ? <CompletionEvidence items={completion.items} missionId={task.mission_id} taskId={task.id} contextCurrent={completion.context_current} /> : <p className="text-sm text-muted-foreground">В проекции нет читаемых оснований этой отметки.</p>}
+    <p className="text-xs text-muted-foreground">Это сохранённые основания отметки. Приёмка всей цели остаётся отдельной.</p>
+  </>}</section>;
+}
+
 function TaskActivity({ task, refreshNonce }: { task: Task; refreshNonce: number }) {
   const rpc = useRpc<PersonalOsContract>();
   const [result, setResult] = useState<TaskActivityResult | null>(null);
@@ -541,9 +591,10 @@ function TaskActivity({ task, refreshNonce }: { task: Task; refreshNonce: number
   const current = activity?.bindings.state === "available" ? activity.bindings.items.find(currentExecution) : null;
   const history = activity?.bindings.state === "available" ? activity.bindings.items.filter(binding => binding !== current) : [];
   return <section className="space-y-3" aria-label="Исполнение задачи"><h3 className="text-base font-semibold">Исполнение задачи</h3>{result === null && !failed ? <p className="text-sm text-muted-foreground" role="status">Читаем сохранённые этапы…</p> : mismatch ? <p className="text-sm text-muted-foreground" role="status">Обновите данные задачи.</p> : !activity ? <p className="text-sm text-muted-foreground" role="status">Нет данных об исполнении.</p> : <>
+    <CompletionGrounds completion={activity.completion} task={task} />
     {current ? <ExecutionStages binding={current} task={task} /> : <p className="text-sm text-muted-foreground">{taskActivityLabel(activity, task)}</p>}
     {activity.dispatchers.state === "available" && activity.dispatchers.items.some(item => item.task_id === task.id && item.bound_task_version === task.version && item.task_version_current && item.current_error_code !== null) && <p className="text-xs text-muted-foreground">В текущей настройке автозапуска есть ошибка. Сохранённые этапы попытки показаны отдельно.</p>}
-    {history.length > 0 && <details><summary className="cursor-pointer text-sm text-muted-foreground">Другие попытки · {history.length}</summary><div className="space-y-3 pt-3">{history.map((binding, index) => <div key={binding.id} className="space-y-2"><p className="text-xs text-muted-foreground">Попытка {index + 1} · {currentExecution(binding) ? "По текущим условиям" : binding.currentness === "historical" ? "По прежним условиям" : "Актуальность неизвестна"}</p><ExecutionStages binding={binding} task={task} /></div>)}</div></details>}
+    {history.length > 0 && <details><summary className="cursor-pointer text-sm text-muted-foreground">Другие попытки · {history.length}</summary><div className="space-y-3 pt-3">{history.map((binding, index) => <div key={binding.id} className="space-y-2"><p className="text-xs text-muted-foreground">Попытка {index + 1} · {currentExecution(binding) ? "По текущим условиям" : binding.task_context_current === false ? "По прежним условиям" : binding.task_version_current === false ? "Из прежней версии задачи" : binding.currentness === "historical" ? "Прежняя попытка" : "Актуальность неизвестна"}</p><ExecutionStages binding={binding} task={task} /></div>)}</div></details>}
     {activity.bindings.truncated && <p className="text-xs text-muted-foreground">История попыток показана не полностью.</p>}
     {activity.dispatchers.state === "available" && activity.dispatchers.items.some(item => item.last_error !== null) && <details><summary className="cursor-pointer text-xs text-muted-foreground">Прежние ошибки автозапуска</summary><p className="pt-2 text-xs text-muted-foreground">В истории сохранены ошибки. Они не подменяют текущую фазу попытки.</p></details>}
   </>}</section>;
@@ -564,13 +615,15 @@ function TaskResultPage({ missionId, taskId, bindingId }: { missionId: string; t
   }, [rpc, taskId, bindingId, revision]);
   const artifact = result?.state === "available" && result.data.taskId === taskId && result.data.bindingId === bindingId && result.data.missionId === missionId ? result.data : null;
   const current = artifact?.currentness === "current" && artifact.taskVersionCurrent === true && artifact.taskContextCurrent === true;
+  const historicalReview = artifact?.currentness === "historical" && artifact.completionEvidence?.contextCurrent === true && artifact.completionEvidence.items.some(item => item.state === "resolved" && item.kind === "consumer_review" && item.artifact?.binding_id === bindingId && item.review?.candidate_current === true && item.review.applicable === true);
   return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex flex-wrap justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => artifact ? navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId }) : navigate.toPluginPanel(PANEL_PATH)}>{artifact ? "← К задаче" : "← Все цели"}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header><h1 className="text-xl font-semibold">Полученное исследование задачи</h1>{result === null && !failed && <p className="text-sm text-muted-foreground" role="status">Проверяем и читаем сохранённый файл…</p>}{failed || result !== null && !artifact ? <p className="text-sm text-muted-foreground" role="status">Файл прочитать не удалось. Его содержание не подтверждено этим чтением.</p> : null}{artifact && <>
-    {!current && <p className="text-sm text-muted-foreground">{artifact.currentness === "historical" ? "Результат попытки по прежним условиям." : "Связь результата с текущими условиями не подтверждена."}</p>}
+    {!current && <p className="text-sm text-muted-foreground">{artifact.taskContextCurrent === false ? "Результат попытки по прежним условиям." : artifact.taskVersionCurrent === false ? "Результат из прежней версии задачи." : artifact.currentness === "historical" ? "Результат прежней попытки." : "Связь результата с текущими условиями не подтверждена."}</p>}
+    {artifact.completionEvidence && <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Основания завершения"><h2 className="text-base font-semibold">Основания отметки «Готово»</h2><p className="text-sm">Этот файл указан среди сохранённых оснований завершения задачи.</p><CompletionEvidence items={artifact.completionEvidence.items} missionId={missionId} taskId={taskId} contextCurrent={artifact.completionEvidence.contextCurrent} showFiles={false} /><p className="text-xs text-muted-foreground">Приёмка всей цели остаётся отдельной.</p></section>}
     <section className="space-y-2"><h2 className="text-base font-semibold">Итог по переданным материалам</h2><ReportBody text={artifact.content.summary} /><p className="text-xs text-muted-foreground">Выводы относятся к переданному пакету материалов, а не текущему статусу системы.</p></section>
     <section className="space-y-3"><h2 className="text-base font-semibold">Выводы</h2><ol className="list-decimal space-y-3 pl-5">{artifact.content.findings.map((finding, index) => <li key={index}><ReportBody text={finding.claim} /></li>)}</ol></section>
     {artifact.content.recommendations.length > 0 && <section className="space-y-3"><h2 className="text-base font-semibold">Предложенные действия</h2><ol className="list-decimal space-y-3 pl-5">{artifact.content.recommendations.map((text, index) => <li key={index}><ReportBody text={text} /></li>)}</ol></section>}
     <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Ограничения · {artifact.content.limitations.length}</summary><ul className="list-disc space-y-3 pl-5 pt-3">{artifact.content.limitations.map((text, index) => <li key={index}><ReportBody text={text} /></li>)}</ul></details>
-    <footer className="space-y-2 border-t border-border pt-4 text-xs text-muted-foreground"><p>Проверка файла: {taskReviewLabel(artifact.review, current)}.</p><p>Контрольная сумма файла сверена. Это не подтверждает приёмку задачи или всей цели.</p></footer>
+    <footer className="space-y-2 border-t border-border pt-4 text-xs text-muted-foreground">{historicalReview ? <details><summary className="cursor-pointer">История попытки</summary><p className="pt-2">Проверка, связанная с попыткой: {taskReviewLabel(artifact.review, current)}.</p></details> : <p>Проверка, связанная с попыткой: {taskReviewLabel(artifact.review, current)}.</p>}<p>Контрольная сумма файла сверена. Это не подтверждает приёмку задачи или всей цели.</p></footer>
   </>}</main>;
 }
 
@@ -580,7 +633,7 @@ function taskCardBody(task: Task) {
   return task.next_action;
 }
 
-function MissionList() {
+function MissionList({ onCompose, composeLabel, composerId }: { onCompose: () => void; composeLabel: string; composerId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const [result, setResult] = useState<MissionsResult | null>(null);
@@ -595,7 +648,7 @@ function MissionList() {
   }, [rpc, revision]);
   const missions = result?.state === "available" ? [...result.data.missions].sort((a, b) => Number(b.state === "active") - Number(a.state === "active")) : null;
   return <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
-    <header className="flex items-center justify-between gap-4"><div><p className="text-xs text-muted-foreground">Личное управление</p><h1 className="text-2xl font-semibold tracking-tight">Цели</h1></div><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
+    <header className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs text-muted-foreground">Личное управление</p><h1 className="text-2xl font-semibold tracking-tight">Цели</h1></div><div className="flex flex-wrap gap-2"><Button size="sm" aria-controls={composerId} onClick={onCompose}>{composeLabel}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>
     {result === null && !failed ? <p className="text-sm text-muted-foreground" role="status">Читаем Personal OS…</p> : failed || result?.state === "unavailable" ? <Unavailable result={result?.state === "unavailable" ? result : null} /> : null}
     {missions && <section className="grid gap-3 md:grid-cols-2" aria-label="Цели Personal OS">{missions.map(mission => <button type="button" key={mission.id} onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + mission.id })} className="flex cursor-pointer flex-col items-start gap-3 rounded-lg border border-border bg-card p-5 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <span className="text-xs text-muted-foreground">{missionLabels[mission.state] ?? "Статус: " + mission.state}</span><h2 className="text-lg font-medium">{mission.title}</h2><span className="line-clamp-2 text-sm text-muted-foreground">{mission.next_action?.text ?? "Следующий шаг не указан"}</span><span className="mt-auto text-xs font-medium">Открыть задачи →</span>
@@ -618,7 +671,7 @@ function TaskDetail({ task, refreshNonce }: { task: Task; refreshNonce: number }
   </article>;
 }
 
-function MissionBoard({ missionId, taskId }: { missionId: string; taskId: string | null }) {
+function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId }: { missionId: string; taskId: string | null; onCompose: () => void; composeLabel: string; composerId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const [mission, setMission] = useState<MissionResult | null>(null);
@@ -626,6 +679,7 @@ function MissionBoard({ missionId, taskId }: { missionId: string; taskId: string
   const [activity, setActivity] = useState<MissionActivityResult | null>(null);
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [doneExpanded, setDoneExpanded] = useState(false);
   useEffect(() => {
     let active = true;
     setMission(null);
@@ -647,9 +701,11 @@ function MissionBoard({ missionId, taskId }: { missionId: string; taskId: string
   const activityData = activity?.state === "available" && activity.data.state === "available" && activity.data.scope === "mission" && activity.data.mission_id === missionId && activity.data.task_id === null ? activity.data : null;
   const historicalTasks = board?.items.filter(task => task.state === "done" && task.completion_current !== true) ?? [];
   const selectedTask = taskId && board ? board.items.find(task => task.id === taskId) : null;
-  return <main className="flex min-h-0 flex-col gap-5 p-4 md:p-8">
-    <header className="flex flex-wrap items-center justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => taskId ? go(null) : navigate.toPluginPanel(PANEL_PATH)}>← {taskId ? "К задачам" : "Все цели"}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
-    {mission?.state === "available" && <section className="space-y-2"><p className="text-xs text-muted-foreground">{missionLabels[mission.data.state] ?? "Статус: " + mission.data.state}</p><h1 className="text-2xl font-semibold tracking-tight">{mission.data.title}</h1>{!taskId && mission.data.next_action?.text && <p className="line-clamp-3 max-w-3xl text-sm text-muted-foreground"><span className="font-medium text-foreground">Следующий шаг: </span>{mission.data.next_action.text}</p>}</section>}
+  return <main className="flex shrink-0 flex-col gap-4 p-4 md:p-6">
+    {taskId ? <>
+      <header className="flex flex-wrap items-center justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => go(null)}>← К задачам</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
+      {mission?.state === "available" && <section className="space-y-2"><p className="text-xs text-muted-foreground">{missionLabels[mission.data.state] ?? "Статус: " + mission.data.state}</p><h1 className="text-2xl font-semibold tracking-tight">{mission.data.title}</h1></section>}
+    </> : <header className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1 space-y-1">{mission?.state === "available" ? <><p className="text-xs text-muted-foreground">{missionLabels[mission.data.state] ?? "Статус: " + mission.data.state}</p><h1 className="text-xl font-semibold tracking-tight">{mission.data.title}</h1>{mission.data.next_action?.text && <p className="line-clamp-2 max-w-3xl text-sm text-muted-foreground"><span className="font-medium text-foreground">Дальше: </span>{mission.data.next_action.text}</p>}</> : <h1 className="text-xl font-semibold tracking-tight">Задачи цели</h1>}</div><div className="flex flex-wrap gap-2"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH)}>Все цели</Button><Button size="sm" aria-controls={composerId} onClick={onCompose}>{composeLabel}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>}
     {mission === null && !failed && <p className="text-sm text-muted-foreground" role="status">Читаем цель и задачи…</p>}
     {failed && <Unavailable result={null} />}
     {mission?.state === "unavailable" && <Unavailable result={mission} />}
@@ -659,7 +715,10 @@ function MissionBoard({ missionId, taskId }: { missionId: string; taskId: string
     {board && !taskId && <><div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-4">{columns.map(column => {
       const items = board.items.filter(task => task.state === column.state && (task.state !== "done" || task.completion_current === true));
       const count = column.state === "done" ? board.current_done_count : board.counts?.[column.state];
-      return <section key={column.state} className="min-w-0 rounded-lg bg-secondary/40 p-3" aria-label={column.title}><header className="mb-3 flex items-center justify-between gap-2 px-1"><h2 className="text-sm font-medium">{column.title}</h2><span className="text-xs tabular-nums text-muted-foreground">{count ?? "?"}</span></header><div className="space-y-2">{items.map(task => <button type="button" key={task.id} onClick={() => go(task.id)} className="flex w-full cursor-pointer flex-col gap-3 rounded-md border border-border bg-card p-4 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="text-sm font-medium">{task.title}</span>{taskCardBody(task) && <span className="line-clamp-2 text-xs text-muted-foreground">{taskCardBody(task)}</span>}{(task.owner_label || task.state === "doing") && <span className="text-xs text-muted-foreground">{task.owner_label ?? "Исполнитель не указан"}</span>}{task.context_current !== true && <span className="text-xs text-muted-foreground">Актуальность не подтверждена</span>}<TaskActivityBadge activity={activityData?.items.find(item => item.task.id === task.id) ?? null} task={task} /></button>)}{items.length === 0 && <p className="px-1 py-4 text-xs text-muted-foreground">{board.truncated ? "Нет в полученной части" : "Нет задач"}</p>}</div></section>;
+      const compact = column.state === "done" && !doneExpanded && items.length > 3;
+      const visibleItems = compact ? items.slice(-3) : items;
+      const completeDoneList = !board.truncated && count !== null && count === items.length;
+      return <section key={column.state} className="min-w-0 rounded-lg bg-secondary/40 p-3" aria-label={column.title}><header className="mb-3 flex items-center justify-between gap-2 px-1"><h2 className="text-sm font-medium">{column.title}</h2><span className="text-xs tabular-nums text-muted-foreground">{count ?? "?"}</span></header><div className="space-y-2">{visibleItems.map(task => <button type="button" key={task.id} onClick={() => go(task.id)} className="flex w-full cursor-pointer flex-col gap-3 rounded-md border border-border bg-card p-4 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="line-clamp-2 text-sm font-medium">{task.title}</span>{taskCardBody(task) && <span className="line-clamp-2 text-xs text-muted-foreground">{taskCardBody(task)}</span>}{(task.owner_label || task.state === "doing") && <span className="text-xs text-muted-foreground">{task.owner_label ?? "Исполнитель не указан"}</span>}{task.context_current !== true && <span className="text-xs text-muted-foreground">Актуальность не подтверждена</span>}<TaskActivityBadge activity={activityData?.items.find(item => item.task.id === task.id) ?? null} task={task} /></button>)}{items.length === 0 && <p className="px-1 py-4 text-xs text-muted-foreground">{board.truncated ? "Нет в полученной части" : "Нет задач"}</p>}</div>{column.state === "done" && items.length > 3 && <div className="space-y-1 pt-3"><p className="px-1 text-xs text-muted-foreground">{visibleItems.length} из {count ?? "неизвестного количества"}{!completeDoneList ? " · полученная часть" : ""}</p><Button type="button" variant="ghost" size="sm" aria-expanded={doneExpanded} onClick={() => setDoneExpanded(value => !value)}>{doneExpanded ? "Свернуть" : (completeDoneList ? "Показать все · " : "Показать полученные · ") + items.length}</Button></div>}</section>;
     })}</div>{board.truncated && <p className="text-xs text-muted-foreground">Показана ограниченная часть списка. Счётчики относятся ко всей цели.</p>}{(historicalTasks.length > 0 || (board.historical_done_count !== null && board.historical_done_count > 0)) && <details className="rounded-lg border border-border p-4 text-sm"><summary className="cursor-pointer text-muted-foreground">Завершено по прежним условиям · {board.historical_done_count ?? "Количество неизвестно"}</summary><div className="flex flex-col items-start gap-2 pt-3"><p className="text-xs text-muted-foreground">Эти результаты не входят в текущее «Готово».</p>{historicalTasks.map(task => <Button key={task.id} variant="ghost" className="h-auto max-w-full whitespace-normal text-left" onClick={() => go(task.id)}>{task.title} →</Button>)}{board.truncated && <p className="text-xs text-muted-foreground">В истории показаны только задачи из полученной части списка.</p>}</div></details>}</>}
     {mission?.state === "available" && !taskId && <details className="max-w-3xl text-sm"><summary className="cursor-pointer text-muted-foreground">Исходная цель</summary><p className="whitespace-pre-wrap break-words pt-3 text-muted-foreground">{mission.data.objective}</p></details>}
     <footer className="flex flex-wrap gap-3 text-xs text-muted-foreground"><span>Сохранённые статусы задач, не работа процессов</span>{tasks?.state === "available" && <ReadTime value={tasks.observedAt} />}</footer>
@@ -668,10 +727,18 @@ function MissionBoard({ missionId, taskId }: { missionId: string; taskId: string
 
 function PersonalOsPanel({ subPath }: { subPath: string }) {
   const [inputRevision, setInputRevision] = useState(0);
+  const [composeLabel, setComposeLabel] = useState("+ Поручение");
+  const [openRequest, setOpenRequest] = useState(0);
+  const composerId = useId();
+  const onCompose = () => setOpenRequest(value => value + 1);
   const match = /^mission\/(mission_[a-f0-9]{32})(?:\/task\/(task_[a-f0-9]{32})(?:\/result\/(task_execution_[a-f0-9]{32}))?)?$/.exec(subPath);
   const inputMatch = /^input\/(note_[a-f0-9]{32})(?:\/result\/(input_result_[a-f0-9]{32}))?$/.exec(subPath);
   const overview = !subPath || !!match && !match[2];
-  return <><div hidden={!overview}><InputComposer missionId={match?.[1] ?? null} onSaved={() => setInputRevision(value => value + 1)} /></div>{overview && <InputList key={"input-list:" + (match?.[1] ?? "personal")} missionId={match?.[1] ?? null} refreshRevision={inputRevision} />}{!subPath ? <MissionList key="mission-list" /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}</>;
+  return <div className="min-h-0 flex-1 overflow-y-auto">
+    {!subPath ? <MissionList key="mission-list" onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div key="unsupported-route" className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}
+    <div key="owner-composer" hidden={!overview} className="px-4 pb-4 md:px-6"><InputComposer missionId={match?.[1] ?? null} onSaved={() => setInputRevision(value => value + 1)} onStatus={setComposeLabel} openRequest={openRequest} composerId={composerId} /></div>
+    {overview && <div key={"recent-inputs:" + (match?.[1] ?? "personal")} className="px-4 pb-6 md:px-6"><details className="mx-auto w-full max-w-5xl rounded-lg border border-border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">Мои поручения и результаты</summary><InputList key={"input-list:" + (match?.[1] ?? "personal")} missionId={match?.[1] ?? null} refreshRevision={inputRevision} /></details></div>}
+  </div>;
 }
 
 export default definePluginApp(app => {

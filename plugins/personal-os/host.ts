@@ -133,21 +133,29 @@ async function readTaskResult(taskId: string, bindingId: string, signal: AbortSi
   const activity = await readTaskActivity(taskId, signal);
   if (activity.state !== "available") return activity;
   const task = activity.data.items[0];
-  if (activity.data.state !== "available" || !task || task.bindings.state !== "available") return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
-  const matches = task.bindings.items.filter(binding => binding.id === bindingId);
-  if (matches.length !== 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  if (activity.data.state !== "available" || !task) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+  const matches = task.bindings.state === "available" ? task.bindings.items.filter(binding => binding.id === bindingId) : [];
+  if (matches.length > 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
   const binding = matches[0];
-  const artifact = binding.artifact.receipt;
-  if (binding.artifact.state !== "received" || artifact === null) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
-  if (artifact.did !== binding.continuation.delegation_id || artifact.aid !== binding.continuation.attempt_id || artifact.revision !== binding.continuation.revision) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const grounds = task.completion.state === "recorded" ? task.completion.items.filter(item => item.state === "resolved" && item.artifact?.binding_id === bindingId) : [];
+  const recordedArtifacts = grounds.map(item => item.artifact!);
+  if (new Set(recordedArtifacts.map(artifact => JSON.stringify(artifact))).size > 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const completionArtifact = recordedArtifacts[0];
+  const artifact = binding?.artifact.state === "received" ? binding.artifact.receipt : completionArtifact;
+  if (artifact == null || !binding && !completionArtifact) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+  if (binding && (artifact.did !== binding.continuation.delegation_id || artifact.aid !== binding.continuation.attempt_id || artifact.revision !== binding.continuation.revision)) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  if (completionArtifact && (artifact.sha256 !== completionArtifact.sha256 || artifact.size !== completionArtifact.size || artifact.did !== completionArtifact.did || artifact.aid !== completionArtifact.aid || artifact.revision !== completionArtifact.revision)) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
   const path = "/api/task-execution/" + encodeURIComponent(bindingId) + "/artifact?task_id=" + encodeURIComponent(taskId);
   const content = await readVerifiedResearch(path, artifact, signal);
   if (content.state !== "available") return content;
   return { state: "available", observedAt: content.observedAt, data: {
-    taskId, missionId: task.task.mission_id, bindingId, boundTaskVersion: binding.bound_task_version, currentness: binding.currentness,
-    taskVersionCurrent: binding.task_version_current, taskContextCurrent: binding.task_context_current,
+    taskId, missionId: task.task.mission_id, bindingId, boundTaskVersion: binding?.bound_task_version ?? completionArtifact!.bound_task_version,
+    currentness: binding?.currentness ?? completionArtifact!.currentness,
+    taskVersionCurrent: binding ? binding.task_version_current : completionArtifact!.task_version_current, taskContextCurrent: binding ? binding.task_context_current : completionArtifact!.task_context_current,
     artifact: { name: artifact.name, sha256: artifact.sha256, size: artifact.size }, content: content.data,
-    review: binding.review, activityReadAt: activity.data.read_at, integrity: "sha256_verified",
+    review: binding?.review ?? { state: "unavailable", run_id: null, run_phase: null, outcome: null, review_id: null, candidate_id: null, candidate_current: null, applicable: null, error_code: null },
+    completionEvidence: grounds.length ? { taskVersion: task.completion.task_version, contextCurrent: task.completion.context_current, items: grounds } : null,
+    activityReadAt: activity.data.read_at, integrity: "sha256_verified",
   } };
 }
 

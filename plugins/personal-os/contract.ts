@@ -186,12 +186,34 @@ const dispatcherSchema = z.object({
   current_error_code: z.string().max(200).nullable(), last_error: z.object({ code: z.string().max(200), occurred_at: timestampSchema, seq: z.number().int().nonnegative() }).nullable(), live_process_verified: z.literal(false),
 });
 const executionCollectionFields = { state: z.enum(["available", "not_registered", "unavailable", "error"]), total_count: z.number().int().nonnegative().nullable(), truncated: z.boolean(), error_code: z.string().max(200).nullable() };
+const completionArtifactSchema = taskResearchReceiptSchema.extend({
+  binding_id: taskExecutionIdSchema, bound_task_version: z.number().int().positive(), task_version_current: nullableFlag, task_context_current: nullableFlag,
+  currentness: z.enum(["current", "historical", "unknown"]),
+});
+const sourceCompletionArtifactSchema = completionArtifactSchema.extend({
+  receipt_id: z.string().regex(/^artifact_receipt_[a-f0-9]{32}$/), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/), revision: z.number().int().positive(),
+});
+const completionReviewSchema = z.object({
+  id: z.string().regex(/^consumer_review_[a-f0-9]{32}$/), candidate_id: z.string().max(200), outcome: z.enum(["no_blocking_findings", "changes_required", "inconclusive"]),
+  candidate_current: nullableFlag, applicable: nullableFlag, applicable_at_recording: z.boolean(),
+});
+const completionEvidenceSchema = z.object({
+  index: z.number().int().min(0).max(29), kind: z.enum(["artifact", "consumer_review", "recorded_source"]), state: z.enum(["resolved", "recorded_only", "unavailable", "error"]),
+  artifact: completionArtifactSchema.nullable(), review: completionReviewSchema.nullable(), error_code: z.string().max(200).nullable(),
+});
+const completionSchema = z.object({
+  state: z.enum(["not_done", "recorded", "unavailable", "error"]), task_version: z.number().int().positive(), context_current: nullableFlag,
+  evidence_basis: z.literal("recorded_sources"), items: z.array(completionEvidenceSchema).max(30), error_code: z.string().max(200).nullable(),
+});
+const sourceCompletionSchema = completionSchema.extend({ items: z.array(completionEvidenceSchema.extend({ artifact: sourceCompletionArtifactSchema.nullable() })).max(30) });
 export const taskActivityItemSchema = z.object({
   task: z.object({ id: taskIdSchema, mission_id: missionIdSchema, version: z.number().int().positive(), state: z.enum(taskStates), context_hash: hashSchema, current_context_hash: hashSchema.nullable(), context_current: nullableFlag }),
+  completion: completionSchema,
   bindings: z.object({ ...executionCollectionFields, items: z.array(taskExecutionBindingSchema).max(5) }),
   dispatchers: z.object({ ...executionCollectionFields, items: z.array(dispatcherSchema).max(5) }), domain_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
 });
 const sourceTaskActivityItemSchema = taskActivityItemSchema.extend({
+  completion: sourceCompletionSchema,
   bindings: taskActivityItemSchema.shape.bindings.extend({ items: z.array(sourceTaskExecutionBindingSchema).max(5) }),
 });
 const taskActivitySchema = z.object({
@@ -200,10 +222,11 @@ const taskActivitySchema = z.object({
   read_at: timestampSchema, live_process_verified: z.literal(false), completion_available: z.literal(false),
 });
 export const sourceTaskActivitySchema = taskActivitySchema.extend({ items: z.array(sourceTaskActivityItemSchema).max(50) })
-  .refine(value => value.items.every(item => item.bindings.items.every(binding => binding.currentness !== "current" || (binding.task_version_current === true && binding.task_context_current === true && binding.bound_task_version === item.task.version && item.task.context_current === true)) && item.dispatchers.items.every(dispatcher => !dispatcher.task_version_current || dispatcher.bound_task_version === item.task.version)));
+  .refine(value => value.items.every(item => item.completion.task_version === item.task.version && item.completion.context_current === item.task.context_current && (item.completion.state !== "recorded" || item.task.state === "done") && item.bindings.items.every(binding => binding.currentness !== "current" || (binding.task_version_current === true && binding.task_context_current === true && binding.bound_task_version === item.task.version && item.task.context_current === true)) && item.dispatchers.items.every(dispatcher => !dispatcher.task_version_current || dispatcher.bound_task_version === item.task.version)));
 const taskResultSchema = z.object({
   taskId: taskIdSchema, missionId: missionIdSchema, bindingId: taskExecutionIdSchema, boundTaskVersion: z.number().int().positive(), currentness: z.enum(["current", "historical", "unknown"]),
   taskVersionCurrent: nullableFlag, taskContextCurrent: nullableFlag, artifact: publicArtifactSchema, content: researchContentSchema, review: taskReviewSchema,
+  completionEvidence: z.object({ taskVersion: z.number().int().positive(), contextCurrent: nullableFlag, items: z.array(completionEvidenceSchema).max(30) }).nullable(),
   activityReadAt: timestampSchema, integrity: z.literal("sha256_verified"),
 });
 

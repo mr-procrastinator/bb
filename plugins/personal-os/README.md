@@ -81,6 +81,29 @@ exists. Historical exact results remain readable with historical flags. Current
 file accessibility is established only when the read succeeds; metadata alone
 retains `availability:not_rechecked`.
 
+Task activity also exposes `completion` as a separate projection of recorded
+completion grounds. A `done` task update can increment task version while its
+explicitly referenced result remains valid evidence. The old execution binding
+still stays historical and cannot authorize another launch. Completion state is
+read from the task; neither receiving a file nor its consumer review creates it.
+
+Only exact `artifact-receipt:artifact_receipt_<32hex>` and
+`consumer-review:consumer_review_<32hex>` evidence locators are resolved. A file
+receipt must match one exact task/continuation binding and any recorded SHA-256.
+The named review must match that same explicitly recorded file and its candidate;
+the shared quality reader selects that exact review, including an older review,
+instead of substituting the latest. A review source carrying an unsupported
+SHA-256 stays unavailable. Other sources, including compressed evidence reports,
+remain `recorded_only` and are never opened by this projection. Raw locators and
+private paths do not reach the browser. Resolution confirms identity, not that
+all task requirements are fulfilled or that the whole goal passed acceptance.
+
+An explicitly resolved completion file can be opened even when its execution
+binding is older than the five-item activity history. The existing raw-byte
+reader and owner route still verify its exact identity, size and hash. The result
+response keeps `completionEvidence` separate from execution currentness and its
+review, so recorded completion grounds do not silently enable historical work.
+
 This slice does not add code/bundle downloads, another artifact store, automatic
 dispatch or editable task copies. Opening a file does not complete the task or
 promote its consumer review to domain acceptance.
