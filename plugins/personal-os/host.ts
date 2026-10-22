@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
-import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, type SubmitInput, type SubmissionResult, type InputArtifactResult } from "./contract.js";
+import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
 
 const BASE_URL = "http://127.0.0.1:7317";
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -81,13 +81,7 @@ async function readInput(noteId: string, signal: AbortSignal) {
   return read("/api/inbox/" + encodeURIComponent(noteId), sourceInputDetailResponseSchema.refine(value => value.item.id === noteId && value.item.results.items.every(result => result.note_id === noteId)), signal, 512 * 1024);
 }
 
-async function readInputArtifact(noteId: string, resultId: string, signal: AbortSignal): Promise<InputArtifactResult> {
-  const detail = await readInput(noteId, signal);
-  if (detail.state !== "available") return detail;
-  if (detail.data.item.results.state !== "available") return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
-  const matches = detail.data.item.results.items.filter(result => result.id === resultId && result.note_id === noteId);
-  if (matches.length !== 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
-  const result = matches[0];
+async function readVerifiedResearch(path: string, artifact: { aid: string; size: number; sha256: string }, signal: AbortSignal): Promise<ReadResult<z.infer<typeof researchContentSchema>>> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener("abort", abort, { once: true });
@@ -95,7 +89,6 @@ async function readInputArtifact(noteId: string, resultId: string, signal: Abort
   const timer = setTimeout(abort, TIMEOUT_MS);
   let received = false;
   try {
-    const path = "/api/inbox/" + encodeURIComponent(noteId) + "/results/" + encodeURIComponent(resultId) + "/artifact";
     const response = await fetch(BASE_URL + path, { method: "GET", redirect: "error", headers: { Accept: "application/json" }, signal: controller.signal });
     if (!response.ok) {
       await response.body?.cancel();
@@ -103,20 +96,59 @@ async function readInputArtifact(noteId: string, resultId: string, signal: Abort
     }
     received = true;
     const bytes = await responseBytes(response, 512 * 1024);
-    if (bytes.byteLength !== result.artifact.size || createHash("sha256").update(bytes).digest("hex") !== result.artifact.sha256) throw new Error("invalid_response");
-    const report = z.object({ schema_version: z.literal(1), attempt_id: z.literal(result.artifact.aid), result: researchContentSchema, error_code: z.null(), acceptance: z.literal("verification_pending") })
+    if (bytes.byteLength !== artifact.size || createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("invalid_response");
+    const report = z.object({ schema_version: z.literal(1), attempt_id: z.literal(artifact.aid), result: researchContentSchema, error_code: z.null(), acceptance: z.literal("verification_pending") })
       .parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
-    return { state: "available", observedAt: new Date().toISOString(), data: {
-      noteId, resultId, candidateId: result.candidate_id,
-      artifact: { name: result.artifact.name, sha256: result.artifact.sha256, size: result.artifact.size }, content: report.result,
-      review: result.review, noteCurrent: result.note_current, candidateCurrent: result.candidate_current, integrity: "sha256_verified",
-    } };
+    return { state: "available", observedAt: new Date().toISOString(), data: report.result };
   } catch {
     return { state: "unavailable", observedAt: new Date().toISOString(), reason: received && !controller.signal.aborted ? "invalid_response" : "service_unavailable" };
   } finally {
     clearTimeout(timer);
     signal.removeEventListener("abort", abort);
   }
+}
+
+async function readInputArtifact(noteId: string, resultId: string, signal: AbortSignal): Promise<InputArtifactResult> {
+  const detail = await readInput(noteId, signal);
+  if (detail.state !== "available") return detail;
+  if (detail.data.item.results.state !== "available") return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const matches = detail.data.item.results.items.filter(result => result.id === resultId && result.note_id === noteId);
+  if (matches.length !== 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const result = matches[0];
+  const path = "/api/inbox/" + encodeURIComponent(noteId) + "/results/" + encodeURIComponent(resultId) + "/artifact";
+  const content = await readVerifiedResearch(path, result.artifact, signal);
+  if (content.state !== "available") return content;
+  return { state: "available", observedAt: content.observedAt, data: {
+    noteId, resultId, candidateId: result.candidate_id,
+    artifact: { name: result.artifact.name, sha256: result.artifact.sha256, size: result.artifact.size }, content: content.data,
+    review: result.review, noteCurrent: result.note_current, candidateCurrent: result.candidate_current, integrity: "sha256_verified",
+  } };
+}
+
+async function readTaskActivity(taskId: string, signal: AbortSignal) {
+  return read("/api/task-execution?task_id=" + encodeURIComponent(taskId), sourceTaskActivitySchema.refine(value => value.scope === "task" && value.task_id === taskId && value.items.length <= 1 && value.items.every(item => item.task.id === taskId && item.task.mission_id === value.mission_id && item.dispatchers.items.every(dispatcher => dispatcher.task_id === taskId))), signal, 1024 * 1024);
+}
+
+async function readTaskResult(taskId: string, bindingId: string, signal: AbortSignal): Promise<TaskResult> {
+  const activity = await readTaskActivity(taskId, signal);
+  if (activity.state !== "available") return activity;
+  const task = activity.data.items[0];
+  if (activity.data.state !== "available" || !task || task.bindings.state !== "available") return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+  const matches = task.bindings.items.filter(binding => binding.id === bindingId);
+  if (matches.length !== 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const binding = matches[0];
+  const artifact = binding.artifact.receipt;
+  if (binding.artifact.state !== "received" || artifact === null) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+  if (artifact.did !== binding.continuation.delegation_id || artifact.aid !== binding.continuation.attempt_id || artifact.revision !== binding.continuation.revision) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  const path = "/api/task-execution/" + encodeURIComponent(bindingId) + "/artifact?task_id=" + encodeURIComponent(taskId);
+  const content = await readVerifiedResearch(path, artifact, signal);
+  if (content.state !== "available") return content;
+  return { state: "available", observedAt: content.observedAt, data: {
+    taskId, missionId: task.task.mission_id, bindingId, boundTaskVersion: binding.bound_task_version, currentness: binding.currentness,
+    taskVersionCurrent: binding.task_version_current, taskContextCurrent: binding.task_context_current,
+    artifact: { name: artifact.name, sha256: artifact.sha256, size: artifact.size }, content: content.data,
+    review: binding.review, activityReadAt: activity.data.read_at, integrity: "sha256_verified",
+  } };
 }
 
 async function submit(input: SubmitInput, signal: AbortSignal): Promise<SubmissionResult> {
@@ -188,6 +220,11 @@ export default experimental_defineHostEntry({
     getTaskChat(input, context) {
       return read("/api/task-chat-links?task_id=" + encodeURIComponent(input.taskId), taskChatSchema.refine(value => value.task_id === input.taskId), context.signal, 65536);
     },
+    getTaskActivity(input, context) { return readTaskActivity(input.taskId, context.signal); },
+    getMissionActivity(input, context) {
+      return read("/api/task-execution?mission_id=" + encodeURIComponent(input.missionId) + "&limit=50", sourceTaskActivitySchema.refine(value => value.scope === "mission" && value.mission_id === input.missionId && value.task_id === null && value.items.every(item => item.task.mission_id === input.missionId && item.dispatchers.items.every(dispatcher => dispatcher.task_id === item.task.id))), context.signal, 1024 * 1024);
+    },
+    getTaskResult(input, context) { return readTaskResult(input.taskId, input.bindingId, context.signal); },
     submitInput(input, context) {
       return submit(input, context.signal);
     },

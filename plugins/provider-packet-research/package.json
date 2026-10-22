@@ -1,0 +1,28 @@
+{
+  "name": "bb-plugin-provider-packet-research",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Opt-in single-turn packet research with no model tools.",
+  "engines": { "bb": ">=0.0", "bbPluginSdk": ">=0.6.57" },
+  "bb": {
+    "name": "Packet research",
+    "description": "One explicitly enabled ChatGPT packet research turn. No native Codex session.",
+    "branding": { "icon": "BookOpen" },
+    "server": "./server.ts",
+    "host": "./host.ts"
+  },
+  "keywords": ["bb-plugin"],
+  "scripts": {
+    "typecheck": "tsrs --noEmit",
+    "prepare:bundled": "bb-plugin-build prepare-bundled"
+  },
+  "dependencies": { "zod": "^4.3.6" },
+  "devDependencies": {
+    "@bb/plugin-build": "workspace:*",
+    "@get-bb/plugin-sdk": "workspace:*",
+    "@types/node": "^22.0.0",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  }
+}

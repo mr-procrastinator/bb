@@ -4,7 +4,9 @@ Baseline: upstream `26de548d5454614e3957960eb8a83b7ead33e781`, 22 October 2026.
 Fork: https://github.com/mr-procrastinator/bb. Origin is the fork; upstream remains get-bb/bb.
 The local fork runs with the Personal OS panel, bounded owner input, saved instruction/result pages
 and an explicit Codex Desktop chat opener. Task links belong to Personal OS and pin the task version,
-semantic context and observed Desktop UUID. Codex and Claude native login health is ready. No BB model turn has been run.
+semantic context and observed Desktop UUID. Codex and Claude native login health was observed ready.
+A BB provider pilot was attempted and held with `invalid_content_type`; no model result is confirmed,
+and the piloted provider is disabled.
 Phone access and an AiweApps execution adapter remain unverified or unimplemented.
 
 ## Ownership
@@ -32,8 +34,9 @@ without model execution. Its command ledger records transport recovery, not anot
 `plugins/personal-os` is the first bounded code slice. UI and CLI use typed server RPC, which calls
 the configured host entry. Only the host reads `http://127.0.0.1:7317`, so a future cloud BB server
 does not mistake its own localhost for the user's Mac. No public Personal OS port or browser credentials.
-Reads use only the three documented goal/task GET paths. Bounded text input uses only the existing
-personal-inbox or pinned-goal input POST. There is no arbitrary URL, redirect or browser-selected host.
+Reads cover goals/tasks, bounded instruction lists/details, explicit task activity and exact attached
+or task-bound research results. Bounded text input uses only the existing personal-inbox or pinned-goal
+input POST. There is no arbitrary URL, redirect or browser-selected host.
 `/api/control` is excluded: its skill catalog snapshot can write skill-version observations.
 
 Show mission selection, actual tasks by state, and task details. Unknown and disconnected sources
@@ -47,12 +50,61 @@ and pending request across reload, without automatic submission. General input s
 inbox. Goal input requires the explicit goal/version. No task-status write, dispatch or automatic
 execution is added. Detailed limits live in `plugins/personal-os/README.md`.
 
+## Task activity and result views
+
+The implemented UI keeps task status separate from execution evidence. `MissionBoard` reads one
+bounded mission activity batch for its cards. `TaskActivity` reads the selected task separately.
+Neither read starts work. A recorded continuation phase describes a saved attempt, not a live process.
+
+| Existing component | Visible state and limit |
+| --- | --- |
+| `TaskActivityBadge` | One short card label for a recorded attempt, saved autostart setup, received-file record, scoped review or current error. An explicitly empty, fully covered execution scope adds no badge. Unknown coverage and read errors remain visible; omitted tasks are not treated as never started. |
+| `TaskActivity` / `ExecutionStages` | The selected current attempt has three stages: **Исполнение → Файл → Проверка файла**. **Другие попытки** distinguishes current, historical and unknown bindings. More than one attempt may match the current conditions. A limited history stays marked incomplete. |
+| File action | **Проверить и прочитать** appears only for an exact binding with a received research receipt. `not_rechecked` is permission to ask the owner reader to check the file, not proof that its bytes are currently readable. Missing or unavailable file data supplies no file action. |
+| `TaskResultPage` | Reads that exact task/binding result, including an early file before instruction attachment. The host verifies size and SHA-256 before returning structured text. The page also checks the returned mission/task/binding against its route. Research conclusions describe the supplied material snapshot, not current system status. |
+| Review text | A saved owner review requires its review identity and outcome. Current conclusions additionally require current binding/candidate and applicability. A saved review-run phase alone does not establish a review, task completion or goal acceptance. |
+| Independent reads | Task ID, mission ID, version and context-current flag must agree between the displayed task and activity. A mismatch displays **Обновите данные задачи** and withholds current labels and file actions. A task-chat link also checks the displayed task version before enabling navigation. |
+| Autostart errors | The current dispatcher error is separate from the saved attempt phase. Past dispatcher errors stay in expandable history; they do not replace the current phase. |
+
+The composer and recent-instruction list appear only on overview pages. The composer remains mounted
+while hidden on task/instruction/result pages, preserving the draft and pending request. Route keys
+have separate component prefixes; board → task → back must leave one instruction list on the board
+and none on the detail. Manual refresh is still explicit. Returning from a task does not establish
+that every saved task field was reread.
+
+The two full research readers render report text as restricted Markdown, including GFM tables with
+contained horizontal overflow. HTML and media are excluded. Only absolute HTTPS links are active;
+collapsed previews keep links as text. Clamping preserves the full Markdown input rather than cutting
+a table mid-row.
+
+This section describes the implemented source contract. Root's specific live route/result checks are
+recorded below; source review is not visual acceptance of every state.
+The native Personal OS research/review path observed below is separate from a BB provider turn.
+The attempted provider pilot has no confirmed model result. Active-provider crash recovery also
+remains unverified. A task badge, file or scoped review does not change those boundaries.
+
+### Next compact UX step — proposed, not implemented
+
+Keep the existing path: `MissionBoard` goal → `TaskDetail` task → `TaskActivity` attempt →
+`ExecutionStages` file/review → `TaskResultPage` exact file. The missing visible level is the selected
+attempt: its main `ExecutionStages` block has no attempt caption, while the other attempts already
+have explicit labels inside **Другие попытки**.
+
+Add a short **Попытка по текущим условиям** caption to that selected block; do not imply it is the only current attempt. Keep its three stage labels and one
+file action together. Reuse the existing goal/task titles and back buttons for context; do not add
+another list or a header status report. Keep historical attempts and past-error explanations folded.
+Consolidate repeated evidence caveats locally instead of repeating them above the task's useful content.
+This is a small hierarchy change in existing components, with no new data owner, status inference or
+automatic action. The manual acceptance check is concrete: from one task detail, the owner can identify
+the task's saved state, the selected attempt, the remaining file/review step and the exact file without
+opening history. Historical and unknown states must still be distinguishable.
+
 ## Eight reviewed directions
 
 | Direction | Existing capability | Remaining integration |
 | --- | --- | --- |
 | Multiple Codex accounts | Experimental Account Pooler, separate OAuth entries, ordered failover | A fixed account per chat and separate CODEX_HOME profiles are not implemented by the pool |
-| Claude and other agents | Codex and Claude installed, enabled and native-login health ready; thread limits configured | No BB model turn observed; other ACP providers are separate; native nested agents are outside the BB thread counter |
+| Claude and other agents | Codex and Claude installed; native-login health observed ready; thread limits configured | BB provider pilot held with `invalid_content_type`, no confirmed model result, piloted provider disabled; native nested agents remain outside the BB thread counter |
 | Phone | Responsive web UI, native mobile shell, pairing, voice pipeline | Configure authenticated HTTPS access; a cloned fork does not make the Mac reachable |
 | Codex Desktop | Dedicated local snapshot list/search and allowlisted opener; one known chat opened and title matched | No automatic BB/provider/Desktop ID mapping; stale snapshots and absent chats remain bounded by the source |
 | Personal OS panel | Goal/task/instruction/result reads and bounded owner input through typed host RPC/CLI; exact retry ledger | No Tasks mirror, task-status writes or execution dispatch; pending drafts are browser-local |
@@ -108,7 +160,8 @@ reads only the public `host-id`, never authentication contents. Initial enrollme
 step. Server startup still runs BB's own migrations and maintenance. Existing queued work and provider
 configuration remain owned by BB; starting the server is not a promise that those existing workflows
 cannot resume. Provider enablement remains an explicit BB configuration action; the manager does not
-change it. Codex and Claude are currently enabled with native-login health ready; no model turn is claimed.
+change it. Native-login readiness was observed before the provider pilot. The piloted provider was
+later disabled; its held outcome is recorded below.
 
 The manager pins the native user's home and strips inherited alternate provider profiles, BB routing,
 account-pool variables, API-key/token/base-URL/FD overrides for Claude/Codex, and standard custom-provider
@@ -157,7 +210,8 @@ selected active mission, and 11 tasks (3 doing, 3 todo, 1 blocked, 4 done). Publ
 evidence locators, workspace and context/history payloads. That initial observation covered only the
 host reader; the later server/CLI/UI observations are recorded below. Phone access remains unverified.
 Private evidence is stored outside checkout as compressed plugin-build-final and plugin-live-host
-records. The SDK build also passed. No provider model or automated test was run.
+records. The SDK build also passed. No successful BB model result was part of that initial verification.
+Automated tests were not run.
 
 Independent reviews checked contract/host boundaries and UI source. Two UI findings were corrected:
 historical results now remain reachable outside current Done, and an unspecified executor stays
@@ -187,7 +241,8 @@ returned to the board and reopened after reload and rebuilding. The board then s
 A live UI defect was corrected: current Done cards now display their result instead of an obsolete
 next action. The final plugin typecheck/build passed. Private screenshot:
 `evidence/personal-os-board-20261022.png` in the isolated runtime, outside Git.
-No BB model turn or automated test was run. Native mobile and remote access remain unverified.
+That board pass did not validate a BB model result. Automated tests were not run.
+Native mobile and remote access remain unverified.
 
 The input flow was exercised in Chrome. A draft survived reload. The first submission then reported
 `storage_unavailable`: the installed ledger had already applied migration0 with its original hash,
@@ -197,10 +252,10 @@ The five existing inbox entries stayed unchanged; the inbox then contained six e
 was subsequently triaged to `planned`; that state does not mean its requested work was executed.
 The plugin still calls the real Personal OS owners and does not relocate or replace their database.
 
-Global and local-host BB thread limits are 8. Codex 0.153.4 and Claude 2.1.308 are installed, enabled and
-reported ready by provider health. The native Claude CLI reports Team. A plan-label projection defect
+At initial setup, global and local-host BB thread limits were 8. Codex 0.153.4 and Claude 2.1.308 were
+installed, enabled and reported ready by provider health. The native Claude CLI reported Team. A plan-label projection defect
 was corrected; BB health then also reported Team. These observations do not prove a successful BB
-model turn, and none was run. Native memory, provider subagents and BB Workflows remain off.
+model result. The later held provider pilot is recorded below. Native memory, provider subagents and BB Workflows remain off.
 The thread counter does not itself bound native nested agents. Account/Connect services, automation
 and unprepared optional plugins remain disabled; phone access is not presented as connected.
 
@@ -248,3 +303,24 @@ reviewer recorded a scoped review; the result was attached to that same instruct
 inside BB. No BB provider model turn was used. This proves the bounded Personal OS path, not the future
 AiweApps→BB execution adapter, phone access, full crash recovery or product acceptance. Research text
 is labelled as conclusions from its supplied snapshot, not current system status.
+
+### Latest task activity and provider checks
+
+Root's Chrome pass covered the activity board without empty launch badges, a new task's exact file,
+a historical task's exact file, and navigation back. The current and historical result views remained
+separate. This confirms those specific navigation/read cases, not all activity branches or full UX
+acceptance at 9/10.
+
+The real generated report contained a five-signal Markdown table. Root expanded it and observed an
+actual rendered table in Chrome, rather than literal pipe-delimited text. Proof:
+`research-table-rendered-20261022.png`, retained outside Git. This is a table-rendering observation,
+not a claim about every long report, narrow viewport or maximum-size document.
+
+A BB provider pilot was attempted. It was held with `invalid_content_type`; no model result is
+confirmed. The piloted provider is disabled. The held status does not establish whether a model ran,
+and this record does not infer a provider-side cause from that error alone. The earlier no-provider
+statements described the initial checks; they must not be read as saying no pilot was attempted.
+
+A new timeline fix exists in source only. It has not been verified live, and the previously saved
+history remains unrepaired. It must not be presented as recovered history or a successful provider
+result.

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { lookupInputSchema, missionInputSchema, personalOsContract, personalOsHostContract, submissionResultSchema, submitInputSchema, listInputsInputSchema, getInputInputSchema, inputArtifactInputSchema, taskChatInputSchema, openTaskChatInputSchema, desktopOpenResultSchema, type MissionResult, type MissionsResult, type TasksResult, type SubmitInput, type SubmissionResult, type SubmissionLookupResult, type InputsResult, type InputDetailResult, type InputArtifactResult, type TaskChatResult, type OpenTaskChatResult } from "./contract.js";
+import { lookupInputSchema, missionInputSchema, personalOsContract, personalOsHostContract, submissionResultSchema, submitInputSchema, listInputsInputSchema, getInputInputSchema, inputArtifactInputSchema, taskChatInputSchema, openTaskChatInputSchema, desktopOpenResultSchema, taskResultInputSchema, type MissionResult, type MissionsResult, type TasksResult, type SubmitInput, type SubmissionResult, type SubmissionLookupResult, type InputsResult, type InputDetailResult, type InputArtifactResult, type TaskChatResult, type OpenTaskChatResult, type TaskActivityResult, type MissionActivityResult, type TaskResult } from "./contract.js";
 
-const HELP = "bb personal-os missions\nbb personal-os mission <mission_id>\nbb personal-os tasks <mission_id>\nbb personal-os inputs [mission_id]\nbb personal-os input <note_id>\nbb personal-os input-artifact <note_id> <input_result_id>\nbb personal-os task-chat <task_id>\nbb personal-os open-task-chat <task_id> <expected-link-version>\nbb personal-os submit <request-uuid> <quoted-text>\nbb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>\nbb personal-os submission <request-uuid>\nJSON reads, bounded owner input and explicit linked-chat navigation. Repeat unknown save outcomes with the exact request UUID, text and target. Configure the enrolled host ID with bb plugin config personal-os.";
+const HELP = "bb personal-os missions\nbb personal-os mission <mission_id>\nbb personal-os tasks <mission_id>\nbb personal-os task-activity <task_id>\nbb personal-os mission-activity <mission_id>\nbb personal-os task-result <task_id> <task_execution_binding_id>\nbb personal-os inputs [mission_id]\nbb personal-os input <note_id>\nbb personal-os input-artifact <note_id> <input_result_id>\nbb personal-os task-chat <task_id>\nbb personal-os open-task-chat <task_id> <expected-link-version>\nbb personal-os submit <request-uuid> <quoted-text>\nbb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>\nbb personal-os submission <request-uuid>\nJSON reads, bounded owner input and explicit linked-chat navigation. Repeat unknown save outcomes with the exact request UUID, text and target. Configure the enrolled host ID with bb plugin config personal-os.";
 
 const commandRowSchema = z.object({
   request_id: lookupInputSchema.shape.requestId,
@@ -204,6 +204,9 @@ export default function plugin(bb: BbPluginApi) {
     getInput: input => hostCall(hostId => host.call("getInput", input, { hostId, timeoutMs: 10000 })),
     getInputArtifact: input => hostCall(hostId => host.call("getInputArtifact", input, { hostId, timeoutMs: 15000 })),
     getTaskChat: input => hostCall(hostId => host.call("getTaskChat", input, { hostId, timeoutMs: 10000 })),
+    getTaskActivity: input => hostCall(hostId => host.call("getTaskActivity", input, { hostId, timeoutMs: 10000 })),
+    getMissionActivity: input => hostCall(hostId => host.call("getMissionActivity", input, { hostId, timeoutMs: 10000 })),
+    getTaskResult: input => hostCall(hostId => host.call("getTaskResult", input, { hostId, timeoutMs: 15000 })),
     openTaskChat,
     submitInput,
     getInputSubmission,
@@ -216,6 +219,9 @@ export default function plugin(bb: BbPluginApi) {
       { name: "missions", summary: "List goals", usage: "bb personal-os missions" },
       { name: "mission", summary: "Read one goal", usage: "bb personal-os mission <mission_id>" },
       { name: "tasks", summary: "Read goal tasks", usage: "bb personal-os tasks <mission_id>" },
+      { name: "task-activity", summary: "Read exact task execution bindings and saved phases", usage: "bb personal-os task-activity <task_id>" },
+      { name: "mission-activity", summary: "Read a bounded batch of goal task activity", usage: "bb personal-os mission-activity <mission_id>" },
+      { name: "task-result", summary: "Read an exact task-bound received research file", usage: "bb personal-os task-result <task_id> <task_execution_binding_id>" },
       { name: "inputs", summary: "List personal instructions, or explicit goal instructions", usage: "bb personal-os inputs [mission_id]" },
       { name: "input", summary: "Read original instruction, saved plan and attached results", usage: "bb personal-os input <note_id>" },
       { name: "input-artifact", summary: "Read exact attached research as bounded public content", usage: "bb personal-os input-artifact <note_id> <input_result_id>" },
@@ -227,13 +233,25 @@ export default function plugin(bb: BbPluginApi) {
     ],
     async run(argv) {
       if (argv.length === 0 || (argv.length === 1 && ["help", "--help", "-h"].includes(argv[0]))) return { exitCode: 0, stdout: HELP };
-      let result: MissionsResult | MissionResult | TasksResult | SubmissionLookupResult | InputsResult | InputDetailResult | InputArtifactResult | TaskChatResult | OpenTaskChatResult;
+      let result: MissionsResult | MissionResult | TasksResult | SubmissionLookupResult | InputsResult | InputDetailResult | InputArtifactResult | TaskChatResult | OpenTaskChatResult | TaskActivityResult | MissionActivityResult | TaskResult;
       if (argv[0] === "missions" && argv.length === 1) {
         result = await handlers.listMissions(null);
       } else if ((argv[0] === "mission" || argv[0] === "tasks") && argv.length === 2) {
         const input = missionInputSchema.safeParse({ missionId: argv[1] });
         if (!input.success) return { exitCode: 1, stderr: "Invalid mission ID.\n" + HELP };
         result = argv[0] === "mission" ? await handlers.getMission(input.data) : await handlers.listTasks(input.data);
+      } else if (argv[0] === "task-activity" && argv.length === 2) {
+        const input = taskChatInputSchema.safeParse({ taskId: argv[1] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid task ID.\n" + HELP };
+        result = await handlers.getTaskActivity(input.data);
+      } else if (argv[0] === "mission-activity" && argv.length === 2) {
+        const input = missionInputSchema.safeParse({ missionId: argv[1] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid mission ID.\n" + HELP };
+        result = await handlers.getMissionActivity(input.data);
+      } else if (argv[0] === "task-result" && argv.length === 3) {
+        const input = taskResultInputSchema.safeParse({ taskId: argv[1], bindingId: argv[2] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid task/execution binding ID.\n" + HELP };
+        result = await handlers.getTaskResult(input.data);
       } else if (argv[0] === "inputs" && (argv.length === 1 || argv.length === 2)) {
         const input = listInputsInputSchema.safeParse(argv.length === 1 ? { scope: "personal" } : { scope: "mission", missionId: argv[1] });
         if (!input.success) return { exitCode: 1, stderr: "Invalid instruction scope.\n" + HELP };

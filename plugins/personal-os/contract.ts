@@ -16,6 +16,7 @@ export const missionSchema = z.object({
 
 const taskFieldsSchema = z.object({
   id: z.string().regex(/^task_[a-f0-9]{32}$/),
+  version: z.number().int().positive(),
   mission_id: missionIdSchema,
   title: z.string().max(4000),
   expected_result: z.string().max(4000).nullable(),
@@ -153,6 +154,59 @@ export const openTaskChatResultSchema = z.union([
   z.object({ state: z.literal("unavailable"), observedAt: timestampSchema, reason: z.enum(["link_unavailable", "link_changed", "task_not_current", "context_not_current", "target_unavailable"]) }).strict(),
 ]);
 
+export const taskExecutionIdSchema = z.string().regex(/^task_execution_[a-f0-9]{32}$/);
+export const taskResultInputSchema = taskChatInputSchema.extend({ bindingId: taskExecutionIdSchema }).strict();
+const taskResearchReceiptSchema = publicArtifactSchema.extend({ acceptance: z.literal("verification_pending"), availability: z.literal("not_rechecked") });
+const sourceTaskResearchReceiptSchema = taskResearchReceiptSchema.extend({
+  receipt_id: z.string().min(1).max(200), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/), revision: z.number().int().positive(),
+});
+const taskReviewSchema = z.object({
+  state: z.enum(["available", "not_registered", "enabled", "unavailable", "error"]), run_id: z.string().max(200).nullable(), run_phase: z.string().max(100).nullable(),
+  outcome: z.enum(["no_blocking_findings", "changes_required", "inconclusive"]).nullable(), review_id: z.string().max(200).nullable(), candidate_id: z.string().max(200).nullable(),
+  candidate_current: nullableFlag, applicable: nullableFlag, error_code: z.string().max(200).nullable(),
+});
+const taskInputResultSchema = z.object({
+  state: z.enum(["prepared", "pending", "attached", "blocked", "error", "not_registered", "unavailable"]), note_id: noteIdSchema.nullable(),
+  attachment_id: resultIdSchema.nullable(), retryable: z.boolean(), error_code: z.string().max(200).nullable(),
+});
+export const taskExecutionBindingSchema = z.object({
+  id: taskExecutionIdSchema, created_at: timestampSchema, bound_task_version: z.number().int().positive(), task_version_current: nullableFlag, task_context_current: nullableFlag,
+  currentness: z.enum(["current", "historical", "unknown"]), binding_state: z.enum(["enabled", "fenced"]), binding_error_code: z.string().max(200).nullable(),
+  continuation: z.object({ id: z.string().regex(/^continuation_[a-f0-9]{32}$/), delegation_id: z.string().regex(/^delegation_[a-f0-9]{32}$/), attempt_id: z.string().regex(/^attempt_[a-f0-9]{32}$/).nullable(),
+    revision: z.number().int().positive(), phase: z.string().min(1).max(100), launch_count: z.union([z.literal(0), z.literal(1)]), error_code: z.string().max(200).nullable(), created_at: timestampSchema, updated_at: timestampSchema }),
+  artifact: z.object({ state: z.enum(["received", "not_received", "unavailable", "error"]), error_code: z.string().max(200).nullable(), receipt: taskResearchReceiptSchema.nullable() }),
+  review: taskReviewSchema, input_result: taskInputResultSchema, live_process_verified: z.literal(false), domain_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
+});
+const sourceTaskExecutionBindingSchema = taskExecutionBindingSchema.extend({
+  artifact: taskExecutionBindingSchema.shape.artifact.extend({ receipt: sourceTaskResearchReceiptSchema.nullable() }),
+});
+const dispatcherSchema = z.object({
+  policy_id: z.string().min(1).max(200), task_id: taskIdSchema, bound_task_version: z.number().int().positive(), task_version_current: z.boolean(),
+  setup_state: z.enum(["pending", "ready"]), phase: z.string().min(1).max(100), delegation_id: z.string().max(200), continuation_id: z.string().max(200).nullable(), binding_id: taskExecutionIdSchema.nullable(),
+  current_error_code: z.string().max(200).nullable(), last_error: z.object({ code: z.string().max(200), occurred_at: timestampSchema, seq: z.number().int().nonnegative() }).nullable(), live_process_verified: z.literal(false),
+});
+const executionCollectionFields = { state: z.enum(["available", "not_registered", "unavailable", "error"]), total_count: z.number().int().nonnegative().nullable(), truncated: z.boolean(), error_code: z.string().max(200).nullable() };
+export const taskActivityItemSchema = z.object({
+  task: z.object({ id: taskIdSchema, mission_id: missionIdSchema, version: z.number().int().positive(), state: z.enum(taskStates), context_hash: hashSchema, current_context_hash: hashSchema.nullable(), context_current: nullableFlag }),
+  bindings: z.object({ ...executionCollectionFields, items: z.array(taskExecutionBindingSchema).max(5) }),
+  dispatchers: z.object({ ...executionCollectionFields, items: z.array(dispatcherSchema).max(5) }), domain_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
+});
+const sourceTaskActivityItemSchema = taskActivityItemSchema.extend({
+  bindings: taskActivityItemSchema.shape.bindings.extend({ items: z.array(sourceTaskExecutionBindingSchema).max(5) }),
+});
+const taskActivitySchema = z.object({
+  schema_version: z.literal(1), state: z.enum(["available", "unavailable", "error"]), scope: z.enum(["task", "mission"]), mission_id: missionIdSchema.nullable(), task_id: taskIdSchema.nullable(),
+  items: z.array(taskActivityItemSchema).max(50), total_count: z.number().int().nonnegative().nullable(), truncated: z.boolean(), error_code: z.string().max(200).nullable(),
+  read_at: timestampSchema, live_process_verified: z.literal(false), completion_available: z.literal(false),
+});
+export const sourceTaskActivitySchema = taskActivitySchema.extend({ items: z.array(sourceTaskActivityItemSchema).max(50) })
+  .refine(value => value.items.every(item => item.bindings.items.every(binding => binding.currentness !== "current" || (binding.task_version_current === true && binding.task_context_current === true && binding.bound_task_version === item.task.version && item.task.context_current === true)) && item.dispatchers.items.every(dispatcher => !dispatcher.task_version_current || dispatcher.bound_task_version === item.task.version)));
+const taskResultSchema = z.object({
+  taskId: taskIdSchema, missionId: missionIdSchema, bindingId: taskExecutionIdSchema, boundTaskVersion: z.number().int().positive(), currentness: z.enum(["current", "historical", "unknown"]),
+  taskVersionCurrent: nullableFlag, taskContextCurrent: nullableFlag, artifact: publicArtifactSchema, content: researchContentSchema, review: taskReviewSchema,
+  activityReadAt: timestampSchema, integrity: z.literal("sha256_verified"),
+});
+
 export const lookupInputSchema = z.object({
   requestId: z.string().uuid().regex(/^[a-f0-9-]{36}$/),
 }).strict();
@@ -202,6 +256,9 @@ export const personalOsHostContract = defineRpcContract({
   getInput: { input: getInputInputSchema, output: readResultSchema(inputDetailResponseSchema) },
   getInputArtifact: { input: inputArtifactInputSchema, output: readResultSchema(inputArtifactSchema) },
   getTaskChat: { input: taskChatInputSchema, output: readResultSchema(taskChatSchema) },
+  getTaskActivity: { input: taskChatInputSchema, output: readResultSchema(taskActivitySchema) },
+  getMissionActivity: { input: missionInputSchema, output: readResultSchema(taskActivitySchema) },
+  getTaskResult: { input: taskResultInputSchema, output: readResultSchema(taskResultSchema) },
   submitInput: { input: submitInputSchema, output: submissionResultSchema },
 });
 
@@ -230,3 +287,8 @@ export type InputDetailResult = z.infer<typeof personalOsContract.getInput.outpu
 export type InputArtifactResult = z.infer<typeof personalOsContract.getInputArtifact.output>;
 export type TaskChatResult = z.infer<typeof personalOsContract.getTaskChat.output>;
 export type OpenTaskChatResult = z.infer<typeof openTaskChatResultSchema>;
+export type TaskActivityItem = z.infer<typeof taskActivityItemSchema>;
+export type TaskExecutionBinding = z.infer<typeof taskExecutionBindingSchema>;
+export type TaskActivityResult = z.infer<typeof personalOsContract.getTaskActivity.output>;
+export type MissionActivityResult = z.infer<typeof personalOsContract.getMissionActivity.output>;
+export type TaskResult = z.infer<typeof personalOsContract.getTaskResult.output>;

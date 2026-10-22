@@ -31,6 +31,9 @@ The same operations are available through typed plugin RPC and CLI:
 bb personal-os missions
 bb personal-os mission mission_0123456789abcdef0123456789abcdef
 bb personal-os tasks mission_0123456789abcdef0123456789abcdef
+bb personal-os task-activity task_0123456789abcdef0123456789abcdef
+bb personal-os mission-activity mission_0123456789abcdef0123456789abcdef
+bb personal-os task-result task_0123456789abcdef0123456789abcdef task_execution_0123456789abcdef0123456789abcdef
 bb personal-os inputs
 bb personal-os inputs mission_0123456789abcdef0123456789abcdef
 bb personal-os input note_0123456789abcdef0123456789abcdef
@@ -53,6 +56,35 @@ appear in a separate expandable history, outside current **Готово**. An un
 executor remains explicitly unknown. Evidence counts refer to recorded sources, not
 independent inspection. Full product acceptance remains separate.
 
+## Task activity
+
+`getMissionActivity` reads one batch of up to 50 tasks, with at most one binding
+and dispatcher per task. `getTaskActivity` reads up to five bindings and five
+dispatchers for one exact task. Counts and truncation remain explicit. Current
+and historical bindings are separate; a missing registered binding does not prove
+that no one worked on the task through another tool.
+
+The projection reports saved continuation phases, received file metadata and
+scoped review. It explicitly retains `live_process_verified:false` and does not
+change task status or acceptance. Dispatcher current errors are separate from
+historical `last_error`. The task version is included in task reads so the UI can
+fence an activity observation against the version of the displayed task. These
+remain separate reads, not an atomic task/activity snapshot.
+
+`getTaskResult` accepts only an exact task ID and its execution binding ID. It
+rereads the owner's binding and received receipt, matches its delegation,
+attempt and revision to the bound continuation, then fetches the owner's verified
+task artifact route. The shared research reader verifies raw size and SHA-256
+before JSON parsing. Only structured research content and that binding's review
+and currentness are projected. This works before an inbox-result attachment
+exists. Historical exact results remain readable with historical flags. Current
+file accessibility is established only when the read succeeds; metadata alone
+retains `availability:not_rechecked`.
+
+This slice does not add code/bundle downloads, another artifact store, automatic
+dispatch or editable task copies. Opening a file does not complete the task or
+promote its consumer review to domain acceptance.
+
 ## Instructions, results and linked chats
 
 `listInputs` reads up to 20 personal instructions by default, or instructions for
@@ -70,6 +102,13 @@ summary, findings, recommendations and limitations reach the browser, alongside
 that result's scoped review and currentness. No raw HTML, local URL, receipt
 locator, model metadata or source history is projected. A successful byte check
 does not change review or complete the instruction.
+
+Both full research pages render structured report text as restricted Markdown with
+GFM tables. HTML and media are excluded; links must be absolute HTTPS URLs. Tables
+scroll inside the report. Long text keeps a read-more control without cutting the
+Markdown source mid-table. Collapsed links remain plain text. Original instructions,
+plans and partial-result summaries retain their existing plain-text presentation.
+This rendering does not change the file, integrity check, currentness or scoped review.
 
 `getTaskChat` reads Personal OS's explicit task-to-Desktop binding. `openTaskChat`
 accepts only a task ID and the displayed link version. It rereads the owner on the
@@ -133,8 +172,10 @@ reload, but not closing the tab.
 Reads use only GET `/api/missions`, `/api/missions/<mission_id>` and
 `/api/tasks?mission_id=<mission_id>`, the bounded `/api/inbox` list/detail and
 exact note/result artifact routes, and `/api/task-chat-links?task_id=<task_id>`.
+Task activity uses only `/api/task-execution?task_id=<task_id>` or the fixed
+mission batch query, and `/api/task-execution/<binding_id>/artifact?task_id=<task_id>`.
 Responses are limited to 2 MiB for goals/tasks, 1 MiB for inbox lists, 512 KiB for
-instruction details and exact artifact bytes, and 64 KiB for chat bindings;
+instruction details and exact artifact bytes, 1 MiB for task activity and 64 KiB for chat bindings;
 100 goals and 500 tasks; requests time out after five seconds. IDs and responses
 are validated at the host boundary. Redirects are rejected. Raw responses,
 credentials, source payloads and arbitrary URLs are not sent to the frontend.

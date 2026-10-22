@@ -912,6 +912,57 @@ Two host-daemon environment variables reach the Claude Code bridge:
 such as a CI runner (mint it with `claude setup-token`). See the
 `claude-code-provider` skill.
 
+### Packet research provider [Opt-in]
+
+The fork's `provider-packet-research` plugin registers provider
+`codex-packet-research` only when `pilotEnabled=true` at plugin load. It defaults
+to off. This is a separate BB provider with one source-packet turn per thread;
+it does not create or resume a native Codex session.
+
+| Setting | Default | Required value |
+| --- | --- | --- |
+| `pilotEnabled` | `false` | Explicit pilot opt-in; reload after changing it. |
+| `hostId` | `""` | Exact enrolled BB host that owns the native login and private profile. |
+| `pilotModel` | `""` | Exact model ID already observed in the real native BB catalog. |
+| `modelSourceRef` | `""` | Reference to that catalog observation. |
+
+Change these through Settings → Installed plugins, the plugin settings SDK, or
+`bb plugin config provider-packet-research set <key> <value>`. There is no
+default model or automatic model probe. Before enabling the pilot, prepare the
+host-private `<daemonDataDir>/plugins/provider-packet-research/packet-research-v1/profile.json`
+described in the
+[plugin README](../plugins/provider-packet-research/README.md#enable-a-bounded-pilot).
+The shared journal is a sibling of `host-data/` and `bridge-data/`; neither
+process directory contains its own profile or journal.
+Its host, model, observation reference and profile hash must match the server
+profile. The directory requires mode `0700` and the file mode `0600`. The fixed
+profile uses `high` reasoning, a 180-second deadline and a 2-MiB response limit.
+Use the isolated runtime that removes inherited provider/account overrides.
+
+Only the workspace `accept-edits` permission selector is accepted. It grants
+no editing capability here: inference receives one validated packet and fixed
+instructions, with no shell, filesystem, web, MCP, app or subagent tools. BB
+instructions, skills, conversation history and provider configuration are not
+forwarded. The host reads its existing ChatGPT login in place; API-key auth,
+account pooling, redirects, retries and model fallback are refused.
+
+A turn requires one JSON text packet, at most 128 KiB, with an exact operation
+UUID, input hash and source cards. Attachments, a second turn, resume and a
+repeated operation cannot start another inference. Requested and returned model
+IDs remain separate. A completed response must also pass report/source
+validation before it is exposed as a result. See the README for the packet
+schema and crash-recovery limits; caller-supplied AiweApps IDs do not grant
+execution authority.
+
+Use `bb packet-research status|result|stop <host-id> <operation-uuid>
+<input-sha256>` to inspect the exact attempt or request cancellation. The same
+typed operations are available through plugin RPC. Status/result do not start
+inference, including while the pilot is disabled. Disabling new dispatch does
+not stop a turn already running. A stop request is not proof that remote work
+stopped: receipts always report `native_stop_proven=false` and
+`resource_release_available=false`. Never use them to release an AiweApps
+resource. An unknown outcome stays held; resending is not recovery.
+
 ### Account Pooler [Experimental]
 
 The builtin Account Pooler plugin pools Claude and Codex accounts behind the bb

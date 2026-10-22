@@ -9,6 +9,9 @@ Use the plugin's typed CLI rather than reading Personal OS SQLite or copying tas
 bb personal-os missions
 bb personal-os mission <mission_id>
 bb personal-os tasks <mission_id>
+bb personal-os task-activity <task_id>
+bb personal-os mission-activity <mission_id>
+bb personal-os task-result <task_id> <task_execution_binding_id>
 bb personal-os inputs
 bb personal-os inputs <mission_id>
 bb personal-os input <note_id>
@@ -23,6 +26,19 @@ the returned items. The plugin has no background refresh: `observedAt` is API re
 Keep `doing`, an agent's report, and accepted work separate. A historical `done` does not count as current
 completion. Applied skills and evidence counts are recorded claims, not independent inspection.
 Mission and task reads are separate observations; do not claim one atomic snapshot.
+
+Task activity reads saved phases through explicit owner bindings. A mission batch is bounded to 50
+tasks and one binding/dispatcher each; a task detail reads up to five of each. Preserve truncation,
+current/historical flags, and `live_process_verified:false`. Match the activity's task version to the
+displayed task version before calling its phase current. A missing binding is not proof that the task
+never ran elsewhere. Dispatcher `last_error` is history, separate from the current error.
+
+Read `task-result` only with a binding ID returned for that exact task. The owner verifies the receipt;
+the BB host verifies the exact bytes before projecting structured research. A received file can be
+read before inbox attachment. Historical files remain historical. Metadata alone does not prove that
+the file is currently accessible. Do not infer task completion or domain acceptance from a phase,
+received file or consumer review. No dispatcher, task mirror, code/bundle download or new artifact
+store is added by these commands.
 
 Personal instructions are separate from goal-bound instructions. Read a note's original plan and
 partial results through `input`; do not reconstruct them from chat summaries. `input-artifact`

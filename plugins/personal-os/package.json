@@ -19,7 +19,7 @@
     "typecheck": "tsrs --noEmit",
     "prepare:bundled": "bb-plugin-build prepare-bundled"
   },
-  "dependencies": { "@bb/shared-ui": "workspace:*", "zod": "^4.3.6" },
+  "dependencies": { "@bb/shared-ui": "workspace:*", "react-markdown": "^10.1.0", "remark-gfm": "^4.0.1", "zod": "^4.3.6" },
   "devDependencies": {
     "@bb/plugin-build": "workspace:*",
     "@get-bb/plugin-sdk": "workspace:*",
