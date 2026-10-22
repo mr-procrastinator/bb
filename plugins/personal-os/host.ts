@@ -153,7 +153,7 @@ async function readTaskResult(taskId: string, bindingId: string, signal: AbortSi
     currentness: binding?.currentness ?? completionArtifact!.currentness,
     taskVersionCurrent: binding ? binding.task_version_current : completionArtifact!.task_version_current, taskContextCurrent: binding ? binding.task_context_current : completionArtifact!.task_context_current,
     artifact: { name: artifact.name, sha256: artifact.sha256, size: artifact.size }, content: content.data,
-    review: binding?.review ?? { state: "unavailable", run_id: null, run_phase: null, outcome: null, review_id: null, candidate_id: null, candidate_current: null, applicable: null, error_code: null },
+    review: binding?.review ?? { state: "unavailable", run_id: null, run_phase: null, outcome: null, review_id: null, candidate_id: null, candidate_current: null, applicable: null, error_code: null, readiness: null },
     completionEvidence: grounds.length ? { taskVersion: task.completion.task_version, contextCurrent: task.completion.context_current, items: grounds } : null,
     activityReadAt: activity.data.read_at, integrity: "sha256_verified",
   } };

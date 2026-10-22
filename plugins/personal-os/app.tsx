@@ -5,7 +5,7 @@ import { definePluginApp, experimental_usePluginId, useBbNavigate, useRpc } from
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { z } from "zod";
-import { submitInputSchema, type InputArtifactResult, type InputDetail, type InputDetailResult, type InputItem, type InputsResult, type Mission, type MissionActivityResult, type MissionResult, type MissionsResult, type OpenTaskChatResult, type PartialResult, type PersonalOsContract, type SubmitInput, type SubmissionLookupResult, type Task, type TaskActivityItem, type TaskActivityResult, type TaskChatResult, type TaskExecutionBinding, type TaskResult, type TasksResult } from "./contract.js";
+import { submitInputSchema, type CandidateReadiness, type InputArtifactResult, type InputDetail, type InputDetailResult, type InputItem, type InputsResult, type Mission, type MissionActivityResult, type MissionResult, type MissionsResult, type OpenTaskChatResult, type PartialResult, type PersonalOsContract, type SubmitInput, type SubmissionLookupResult, type Task, type TaskActivityItem, type TaskActivityResult, type TaskChatResult, type TaskExecutionBinding, type TaskResult, type TasksResult } from "./contract.js";
 
 const PANEL_PATH = "personal-os";
 const columns = [
@@ -529,11 +529,59 @@ function TaskActivityBadge({ activity, task }: { activity: TaskActivityItem | nu
   return label ? <span className="text-xs text-muted-foreground">{label}</span> : null;
 }
 
-function ExecutionStages({ binding, task }: { binding: TaskExecutionBinding; task: Task }) {
+const readinessDimensions = [
+  { id: "accuracy", label: "Точность" },
+  { id: "ux", label: "Удобство" },
+  { id: "visual", label: "Визуальное качество" },
+  { id: "resilience", label: "Устойчивость" },
+  { id: "delivery", label: "Готовность поставки" },
+] as const;
+
+function readinessBlockerLabel(blocker: CandidateReadiness["blockers"][number]) {
+  const labels: Record<string, string> = {
+    profile_not_bound: "Профиль качества предложен, но не принят для цели",
+    calibration_unconfirmed: "Согласование образцов не подтверждено",
+    sample_references_unverified: "Ссылки на образцы не проверены",
+    independence_unverified: "Независимость проверки не подтверждена",
+    context_stale: "Условия цели изменились",
+    profile_stale: "Профиль качества изменился",
+    mission_not_active: "Цель сейчас не активна",
+    review_not_sufficient: "Проверки результата недостаточно",
+    criterion_state_unconfirmed: "Состояния критериев не подтверждены",
+    requirement_unconfirmed: "Выполнение требования не подтверждено",
+    dimension_unconfirmed: "Оценка направления или её основание не подтверждены",
+    open_blocking_finding: "Есть открытое блокирующее замечание",
+    decisions_unavailable: "Решения владельца недоступны",
+    required_decision_open: "Нужно обязательное решение владельца",
+    artifact_not_produced: "Основание получения файла не подтверждено",
+  };
+  const dimension = blocker.target_type === "dimension" ? readinessDimensions.find(item => item.id === blocker.target_id) : null;
+  return (dimension ? dimension.label + ": " : "") + (labels[blocker.code] ?? "Осталось препятствие для проверки результата");
+}
+
+function ReadinessSummary({ readiness, candidateId, reviewId }: { readiness: CandidateReadiness | null; candidateId: string | null; reviewId: string | null }) {
+  if (!candidateId || !reviewId) return null;
+  const exact = readiness?.candidate_id === candidateId && readiness.review_id === reviewId ? readiness : null;
+  const available = exact?.state === "available";
+  const coverage = available ? exact.coverage?.criterion_states : null;
+  const remaining = new Map<string, number>();
+  if (available) for (const blocker of exact.blockers) {
+    if (["calibration_unconfirmed", "independence_unverified"].includes(blocker.code)) continue;
+    const label = readinessBlockerLabel(blocker);
+    remaining.set(label, (remaining.get(label) ?? 0) + 1);
+  }
+  const stateLabel = !exact || ["unavailable", "error"].includes(exact.state) ? "Данные проверки недоступны" : exact.state === "not_assessed" ? "Проверка по профилю не записана" : exact.readiness === "stale" || exact.context_current === false || exact.profile_current === false ? "Данные проверки устарели" : exact.readiness === "blocked" ? "Есть препятствия для приёмки цели" : "Оценка готовности не подтверждена";
+  return <section className="space-y-3 rounded-md border border-border p-3" aria-label="Проверка результата по профилю цели"><div className="space-y-1"><h4 className="text-sm font-medium">Проверка по профилю цели</h4><p className="text-xs text-muted-foreground">{stateLabel}</p></div>{available && <>{exact.coverage && <p className="text-xs">Область отчёта: {exact.coverage.requirements.review_evidence_covered} из {exact.coverage.requirements.total} требований цели.</p>}<dl className="space-y-1 text-xs">{readinessDimensions.map(dimension => {
+    const score = exact.dimension_scores.find(item => item.dimension_id === dimension.id);
+    return <div key={dimension.id} className="flex flex-wrap justify-between gap-x-3 gap-y-1"><dt className="text-muted-foreground">{dimension.label}</dt><dd>{score?.applicable === false ? "Не применяется" : score?.score === null || !score ? "Оценка не записана" : "Оценка в записи: " + score.score + "/10"}</dd></div>;
+  })}</dl><p className="text-xs">Записей о проверках состояний: {coverage ? coverage.reported_checked + " из " + coverage.total : "количество неизвестно"}.</p><p className="text-xs text-muted-foreground">Это область отчёта, не выполненные требования. В записях возможны неизвестные состояния и невыполненные проверки.</p></>}<ul className="space-y-1 text-xs text-muted-foreground"><li>Согласование образцов не подтверждено.</li><li>Независимость проверки не подтверждена.</li></ul>{remaining.size > 0 && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Другие препятствия · {[...remaining.values()].reduce((total, count) => total + count, 0)}</summary><ul className="space-y-1 pt-2 text-muted-foreground">{[...remaining].map(([label, count]) => <li key={label}>{label}{count > 1 ? " · " + count : ""}.</li>)}</ul></details>}{available && (exact.truncated || exact.blocker_count !== null && exact.blocker_count > exact.blockers.length) && <p className="text-xs text-muted-foreground">Показана только полученная часть препятствий.</p>}{available && exact.blocker_count === null && <p className="text-xs text-muted-foreground">Полнота списка препятствий неизвестна.</p>}</section>;
+}
+
+function ExecutionStages({ binding, task, showReadiness = true }: { binding: TaskExecutionBinding; task: Task; showReadiness?: boolean }) {
   const navigate = useBbNavigate();
   const hasReceipt = binding.artifact.state === "received" && binding.artifact.receipt !== null;
   const fileLabel = hasReceipt ? "Получение записано; файл ещё не перечитан" : binding.artifact.state === "not_received" ? "Файл не получен" : "Сведения о файле недоступны";
-  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="grid gap-4 sm:grid-cols-3"><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Исполнение</h3><p className="text-sm">{executionPhaseLabels[binding.continuation.phase] ?? "Фаза неизвестна"}</p></div><div className="space-y-2"><h3 className="text-xs text-muted-foreground">Файл</h3><p className="text-sm">{fileLabel}</p>{hasReceipt && <Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + task.mission_id + "/task/" + task.id + "/result/" + binding.id })}>Проверить и прочитать →</Button>}</div><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Проверка файла</h3><p className="text-sm">{taskReviewLabel(binding.review, currentExecution(binding))}</p></div></div>{binding.input_result.state === "attached" && binding.input_result.note_id && <Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + binding.input_result.note_id })}>Результат добавлен в поручение →</Button>}<p className="text-xs text-muted-foreground">Сохранённые этапы попытки. Они не подтверждают работу процесса сейчас или приёмку цели.</p></section>;
+  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="grid gap-4 sm:grid-cols-3"><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Исполнение</h3><p className="text-sm">{executionPhaseLabels[binding.continuation.phase] ?? "Фаза неизвестна"}</p></div><div className="space-y-2"><h3 className="text-xs text-muted-foreground">Файл</h3><p className="text-sm">{fileLabel}</p>{hasReceipt && <Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + task.mission_id + "/task/" + task.id + "/result/" + binding.id })}>Проверить и прочитать →</Button>}</div><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Проверка файла</h3><p className="text-sm">{taskReviewLabel(binding.review, currentExecution(binding))}</p></div></div>{showReadiness && <ReadinessSummary key={binding.review.review_id + ":" + binding.review.readiness?.assessment_id} readiness={binding.review.readiness} candidateId={binding.review.candidate_id} reviewId={binding.review.review_id} />}{binding.input_result.state === "attached" && binding.input_result.note_id && <Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + binding.input_result.note_id })}>Результат добавлен в поручение →</Button>}<p className="text-xs text-muted-foreground">Сохранённые этапы попытки. Они не подтверждают работу процесса сейчас или приёмку цели.</p></section>;
 }
 
 type CompletionItem = TaskActivityItem["completion"]["items"][number];
@@ -556,7 +604,7 @@ function CompletionEvidence({ items, missionId, taskId, contextCurrent, showFile
     {showFiles && [...files.values()].map(file => <div key={file.binding_id} className="flex flex-wrap items-center justify-between gap-3"><div className="space-y-1"><p className="text-sm font-medium">Полученный файл исследования</p><p className="text-xs text-muted-foreground">{file.currentness === "historical" ? "Из прежней попытки" : file.currentness === "current" ? "Из попытки по текущим условиям" : "Актуальность попытки неизвестна"}</p></div><Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId + "/result/" + file.binding_id })}>Проверить и прочитать →</Button></div>)}
     {[...reviews.values()].map(review => {
       const applicable = contextCurrent === true && review.candidate_current === true && review.applicable === true;
-      return <section key={review.id} className="space-y-1"><h4 className="text-sm font-medium">Проверка, указанная при завершении</h4><p className="text-sm">{applicable ? outcomes[review.outcome] : "Записанный вывод: " + outcomes[review.outcome]}</p>{!applicable && <p className="text-xs text-muted-foreground">{review.applicable_at_recording ? "Когда проверку сохранили, она была применима. Текущая применимость не подтверждена." : "Применимость проверки к текущим условиям не подтверждена."}</p>}</section>;
+      return <section key={review.id} className="space-y-2"><h4 className="text-sm font-medium">Проверка, указанная при завершении</h4><p className="text-sm">{applicable ? outcomes[review.outcome] : "Записанный вывод: " + outcomes[review.outcome]}</p>{!applicable && <p className="text-xs text-muted-foreground">{review.applicable_at_recording ? "Когда проверку сохранили, она была применима. Текущая применимость не подтверждена." : "Применимость проверки к текущим условиям не подтверждена."}</p>}<ReadinessSummary key={review.id + ":" + review.readiness?.assessment_id} readiness={review.readiness} candidateId={review.candidate_id} reviewId={review.id} /></section>;
     })}
     {recordedOnly > 0 && <p className="text-xs text-muted-foreground">Сохранено источников без проверки содержимого в этой проекции: {recordedOnly}.</p>}
     {unavailable > 0 && <p className="text-xs text-muted-foreground" role="status">Часть записанных оснований прочитать не удалось.</p>}
@@ -590,11 +638,13 @@ function TaskActivity({ task, refreshNonce }: { task: Task; refreshNonce: number
   const mismatch = response && (!scopeMatches || !activity || !activityMatchesTask(activity, task));
   const current = activity?.bindings.state === "available" ? activity.bindings.items.find(currentExecution) : null;
   const history = activity?.bindings.state === "available" ? activity.bindings.items.filter(binding => binding !== current) : [];
+  const completionReviews = new Set(activity && task.state === "done" && activity.completion.state === "recorded" && activity.completion.task_version === task.version && activity.completion.context_current === task.context_current ? activity.completion.items.flatMap(item => item.state === "resolved" && item.kind === "consumer_review" && item.review ? [item.review.candidate_id + ":" + item.review.id] : []) : []);
+  const showAttemptReadiness = (binding: TaskExecutionBinding) => !completionReviews.has(binding.review.candidate_id + ":" + binding.review.review_id);
   return <section className="space-y-3" aria-label="Исполнение задачи"><h3 className="text-base font-semibold">Исполнение задачи</h3>{result === null && !failed ? <p className="text-sm text-muted-foreground" role="status">Читаем сохранённые этапы…</p> : mismatch ? <p className="text-sm text-muted-foreground" role="status">Обновите данные задачи.</p> : !activity ? <p className="text-sm text-muted-foreground" role="status">Нет данных об исполнении.</p> : <>
     <CompletionGrounds completion={activity.completion} task={task} />
-    {current ? <ExecutionStages binding={current} task={task} /> : <p className="text-sm text-muted-foreground">{taskActivityLabel(activity, task)}</p>}
+    {current ? <ExecutionStages binding={current} task={task} showReadiness={showAttemptReadiness(current)} /> : <p className="text-sm text-muted-foreground">{taskActivityLabel(activity, task)}</p>}
     {activity.dispatchers.state === "available" && activity.dispatchers.items.some(item => item.task_id === task.id && item.bound_task_version === task.version && item.task_version_current && item.current_error_code !== null) && <p className="text-xs text-muted-foreground">В текущей настройке автозапуска есть ошибка. Сохранённые этапы попытки показаны отдельно.</p>}
-    {history.length > 0 && <details><summary className="cursor-pointer text-sm text-muted-foreground">Другие попытки · {history.length}</summary><div className="space-y-3 pt-3">{history.map((binding, index) => <div key={binding.id} className="space-y-2"><p className="text-xs text-muted-foreground">Попытка {index + 1} · {currentExecution(binding) ? "По текущим условиям" : binding.task_context_current === false ? "По прежним условиям" : binding.task_version_current === false ? "Из прежней версии задачи" : binding.currentness === "historical" ? "Прежняя попытка" : "Актуальность неизвестна"}</p><ExecutionStages binding={binding} task={task} /></div>)}</div></details>}
+    {history.length > 0 && <details><summary className="cursor-pointer text-sm text-muted-foreground">Другие попытки · {history.length}</summary><div className="space-y-3 pt-3">{history.map((binding, index) => <div key={binding.id} className="space-y-2"><p className="text-xs text-muted-foreground">Попытка {index + 1} · {currentExecution(binding) ? "По текущим условиям" : binding.task_context_current === false ? "По прежним условиям" : binding.task_version_current === false ? "Из прежней версии задачи" : binding.currentness === "historical" ? "Прежняя попытка" : "Актуальность неизвестна"}</p><ExecutionStages binding={binding} task={task} showReadiness={showAttemptReadiness(binding)} /></div>)}</div></details>}
     {activity.bindings.truncated && <p className="text-xs text-muted-foreground">История попыток показана не полностью.</p>}
     {activity.dispatchers.state === "available" && activity.dispatchers.items.some(item => item.last_error !== null) && <details><summary className="cursor-pointer text-xs text-muted-foreground">Прежние ошибки автозапуска</summary><p className="pt-2 text-xs text-muted-foreground">В истории сохранены ошибки. Они не подменяют текущую фазу попытки.</p></details>}
   </>}</section>;
@@ -616,6 +666,8 @@ function TaskResultPage({ missionId, taskId, bindingId }: { missionId: string; t
   const artifact = result?.state === "available" && result.data.taskId === taskId && result.data.bindingId === bindingId && result.data.missionId === missionId ? result.data : null;
   const current = artifact?.currentness === "current" && artifact.taskVersionCurrent === true && artifact.taskContextCurrent === true;
   const historicalReview = artifact?.currentness === "historical" && artifact.completionEvidence?.contextCurrent === true && artifact.completionEvidence.items.some(item => item.state === "resolved" && item.kind === "consumer_review" && item.artifact?.binding_id === bindingId && item.review?.candidate_current === true && item.review.applicable === true);
+  const repeatedReadiness = artifact?.completionEvidence?.items.some(item => item.state === "resolved" && item.kind === "consumer_review" && item.review?.id === artifact.review.review_id && item.review.candidate_id === artifact.review.candidate_id);
+  const attemptReadiness = artifact && !repeatedReadiness ? <ReadinessSummary key={artifact.review.review_id + ":" + artifact.review.readiness?.assessment_id} readiness={artifact.review.readiness} candidateId={artifact.review.candidate_id} reviewId={artifact.review.review_id} /> : null;
   return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex flex-wrap justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => artifact ? navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId }) : navigate.toPluginPanel(PANEL_PATH)}>{artifact ? "← К задаче" : "← Все цели"}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header><h1 className="text-xl font-semibold">Полученное исследование задачи</h1>{result === null && !failed && <p className="text-sm text-muted-foreground" role="status">Проверяем и читаем сохранённый файл…</p>}{failed || result !== null && !artifact ? <p className="text-sm text-muted-foreground" role="status">Файл прочитать не удалось. Его содержание не подтверждено этим чтением.</p> : null}{artifact && <>
     {!current && <p className="text-sm text-muted-foreground">{artifact.taskContextCurrent === false ? "Результат попытки по прежним условиям." : artifact.taskVersionCurrent === false ? "Результат из прежней версии задачи." : artifact.currentness === "historical" ? "Результат прежней попытки." : "Связь результата с текущими условиями не подтверждена."}</p>}
     {artifact.completionEvidence && <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Основания завершения"><h2 className="text-base font-semibold">Основания отметки «Готово»</h2><p className="text-sm">Этот файл указан среди сохранённых оснований завершения задачи.</p><CompletionEvidence items={artifact.completionEvidence.items} missionId={missionId} taskId={taskId} contextCurrent={artifact.completionEvidence.contextCurrent} showFiles={false} /><p className="text-xs text-muted-foreground">Приёмка всей цели остаётся отдельной.</p></section>}
@@ -623,7 +675,7 @@ function TaskResultPage({ missionId, taskId, bindingId }: { missionId: string; t
     <section className="space-y-3"><h2 className="text-base font-semibold">Выводы</h2><ol className="list-decimal space-y-3 pl-5">{artifact.content.findings.map((finding, index) => <li key={index}><ReportBody text={finding.claim} /></li>)}</ol></section>
     {artifact.content.recommendations.length > 0 && <section className="space-y-3"><h2 className="text-base font-semibold">Предложенные действия</h2><ol className="list-decimal space-y-3 pl-5">{artifact.content.recommendations.map((text, index) => <li key={index}><ReportBody text={text} /></li>)}</ol></section>}
     <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Ограничения · {artifact.content.limitations.length}</summary><ul className="list-disc space-y-3 pl-5 pt-3">{artifact.content.limitations.map((text, index) => <li key={index}><ReportBody text={text} /></li>)}</ul></details>
-    <footer className="space-y-2 border-t border-border pt-4 text-xs text-muted-foreground">{historicalReview ? <details><summary className="cursor-pointer">История попытки</summary><p className="pt-2">Проверка, связанная с попыткой: {taskReviewLabel(artifact.review, current)}.</p></details> : <p>Проверка, связанная с попыткой: {taskReviewLabel(artifact.review, current)}.</p>}<p>Контрольная сумма файла сверена. Это не подтверждает приёмку задачи или всей цели.</p></footer>
+    <footer className="space-y-3 border-t border-border pt-4 text-xs text-muted-foreground">{historicalReview ? <details><summary className="cursor-pointer">История попытки</summary><div className="space-y-3 pt-2"><p>Проверка, связанная с попыткой: {taskReviewLabel(artifact.review, current)}.</p>{attemptReadiness}</div></details> : <><p>Проверка, связанная с попыткой: {taskReviewLabel(artifact.review, current)}.</p>{attemptReadiness}</>}<p>Контрольная сумма файла сверена. Это не подтверждает приёмку задачи или всей цели.</p></footer>
   </>}</main>;
 }
 

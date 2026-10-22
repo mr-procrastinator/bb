@@ -64,6 +64,7 @@ Neither read starts work. A recorded continuation phase describes a saved attemp
 | `TaskResultPage` | Reads that exact task/binding result, including an early file before instruction attachment. The host verifies size and SHA-256 before returning structured text. The page also checks the returned mission/task/binding against its route. Research conclusions describe the supplied material snapshot, not current system status. |
 | Review text | A saved owner review requires its review identity and outcome. Current conclusions additionally require current binding/candidate and applicability. A saved review-run phase alone does not establish a review, task completion or goal acceptance. |
 | Completion grounds | A done task separately resolves its exact artifact receipt and pinned consumer review. A historical execution binding stays historical after the task version changes. The exact file reader also shows these recorded grounds; the previous attempt review moves into history only when an exact current applicable completion review is present. Neither record establishes whole-goal acceptance. |
+| Proposed profile inspection | Exact candidate/review metadata shows five dimensions, the report's requirement scope, recorded criterion/state entries and blockers. Reported scores come from the assessment request, not from the prior review. Unknown scores stay unknown. This is consumer evidence bookkeeping, not native delivery readiness or goal acceptance. |
 | Independent reads | Task ID, mission ID, version and context-current flag must agree between the displayed task and activity. A mismatch displays **Обновите данные задачи** and withholds current labels and file actions. A task-chat link also checks the displayed task version before enabling navigation. |
 | Autostart errors | The current dispatcher error is separate from the saved attempt phase. Past dispatcher errors stay in expandable history; they do not replace the current phase. |
 
@@ -345,3 +346,11 @@ Runtime evidence stays outside Git: `evidence/board-overlap-before-20261023.png`
 `evidence/board-compact-after-20261023.png`, and
 `evidence/board-completion-manual-20261023.json.gz` under the isolated BB data directory.
 These checks cover the observed desktop routes. Phone, microphone and owner-rated 9/10 remain open.
+
+Root later observed a real partial research inspection in the task and exact-file pages, including
+reload and return: the report mentions 2 of 14 goal requirements, while all 42 required scenario
+check entries and five dimension scores remain unconfirmed. The scoped research task stays done;
+overall acceptance stays blocked. The distinction is explicit in the UI. The full assessment ID,
+hash and matrix remained unchanged across independent owner reads. Existing drafts, routes and
+board layout were not changed by this slice. Evidence remains in the isolated runtime as
+`evidence/readiness-exact-file-20261023.png`; no automated tests were run.

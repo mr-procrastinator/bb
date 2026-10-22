@@ -108,6 +108,23 @@ This slice does not add code/bundle downloads, another artifact store, automatic
 dispatch or editable task copies. Opening a file does not complete the task or
 promote its consumer review to domain acceptance.
 
+### Profile inspection
+
+Attempt reviews and pinned completion reviews may include a bounded readiness
+projection for that exact candidate/review pair. It records the proposed goal
+profile, five dimensions, the report's requirement scope, explicit criterion/state
+entries and remaining blockers. It is not a native quality gate. Numeric scores
+have `score_origin: assessment_request`; they are recorded claims, not inferred
+reviewer grades. Unknown scores remain null. `reported_checked` counts supplied
+entries, including unknown/not_run; it does not count successful scenarios.
+
+The task and exact-file pages show this projection next to the corresponding
+review. Matching candidate/review IDs prevent substitution from another attempt;
+the same review is not rendered twice. No new board summary or status writer is
+added. Calibration, independence and profile adoption remain unconfirmed; opening
+the projection never performs inspection, checks files or completes work. Profile
+payloads, source locators and actor metadata stay on the owner.
+
 ## Instructions, results and linked chats
 
 `listInputs` reads up to 20 personal instructions by default, or instructions for
