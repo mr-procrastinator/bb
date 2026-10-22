@@ -8,6 +8,10 @@
 
 # bb
 
+This is the [Personal OS fork](https://github.com/mr-procrastinator/bb) of get-bb/bb.
+The first integration is a read-only Personal OS plugin. Accounts, mobile access, and an AiweApps execution adapter are separate work; they are not enabled by cloning this repository.
+See [integration architecture and progress](docs/personal-os.md) and [owner rules](.bb/AGENTS.md).
+
 [![npm version](https://img.shields.io/npm/v/bb-app.svg)](https://www.npmjs.com/package/bb-app)
 [![Join Discord](https://img.shields.io/badge/Discord-Join%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/kvBU6tJhcJ)
 

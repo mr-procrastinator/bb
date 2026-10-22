@@ -109,13 +109,13 @@ export async function cachedReactCompiler(cacheDirectory?: string): Promise<
     try {
       const { stdout } = await promisify(execFile)(
         "git",
-        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ["rev-parse", "--git-common-dir"],
         {
           cwd: root,
           encoding: "utf8",
         },
       );
-      directory = resolve(stdout.trim(), "bb-cache/react-compiler");
+      directory = resolve(root, stdout.trim(), "bb-cache/react-compiler");
     } catch {
       directory = resolve(config.cacheDir, "react-compiler");
     }

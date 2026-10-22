@@ -1,5 +1,7 @@
 # Codebase Guidelines
 
+For this fork, also read [.bb/AGENTS.md](.bb/AGENTS.md). Its owner rules prohibit automated tests by default, including delegated runs.
+
 ## Task Completion
 
 - Carry the requested change through implementation, relevant verification, and fixes for failures it causes. Continue authorized, reversible local work without asking for approval at each step; ask when a missing user decision blocks progress.

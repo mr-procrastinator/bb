@@ -1017,6 +1017,15 @@ bb plugin config provider-retry set maximumWait "24 hours"
 Disable it with `bb plugin disable provider-retry`. See the `provider-retry`
 skill.
 
+### Personal OS fork plugin
+
+The local `personal-os` plugin has one setting, `hostId`: the exact enrolled BB host ID of the Mac
+running Personal OS at loopback port7317. Configure it with
+`bb plugin config personal-os set hostId <host_id>`, then reload the plugin. The browser cannot choose
+an arbitrary host or URL. An unset or unavailable host produces an unavailable result, not an empty list.
+The plugin only reads goals and tasks. See [its README](../plugins/personal-os/README.md) for CLI commands
+and limits. Installation does not enable providers, mobile access, or an AiweApps execution adapter.
+
 ### Workflows plugin
 
 The builtin Workflows plugin is disabled on fresh installations
