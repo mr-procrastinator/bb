@@ -12,6 +12,10 @@ This is the [Personal OS fork](https://github.com/mr-procrastinator/bb) of get-b
 The Personal OS plugin reads goals, tasks, saved instructions, plans and attached research from the existing Personal OS API. It saves explicit owner input and opens an explicitly linked task chat through the Codex Desktop plugin. That plugin also searches observed local chats. Existing Claude/Codex logins are detected in the local pilot; a second account, phone access, and an AiweApps execution adapter remain separate work.
 See [integration architecture and progress](docs/personal-os.md) and [owner rules](.bb/AGENTS.md).
 
+An exact research result now separates the reviewer's report, domain gate blockers and protocol
+acceptance. Proposed quality profiles and sample descriptions open by exact version. These views
+do not confirm samples or accept a product; the main task board remains unchanged.
+
 For the already enrolled local pilot, use `node scripts/personal-os-runtime.mjs setup`, then `start`,
 `status` or `stop`. The manager uses the isolated data directory and Node24/ABI137. It does not enroll,
 enable providers or install login startup. The local panel is at `http://127.0.0.1:7319`.

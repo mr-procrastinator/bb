@@ -105,6 +105,28 @@ automatic action. The manual acceptance check is concrete: from one task detail,
 the task's saved state, the selected attempt, the remaining file/review step and the exact file without
 opening history. Historical and unknown states must still be distinguishable.
 
+## Native Delivery and profile version projection
+
+The source now adds a read-only native Delivery view for the exact task-bound
+received research file, plus an exact profile/examples page. Native snapshots
+carry a separate bounded Delivery collection; legacy execution and immutable
+artifact manifests retain their existing contract. Personal OS selects by exact
+DID/revision/attempt/input/request/profile/artifact identity from its saved
+snapshot, then exposes currentness and bounded-history coverage. R1 cannot reuse
+R2's gate. Missing hashes or omitted history remain unknown; GET performs no
+network, schema creation, inspection or file read.
+
+Native `passed` and its acceptance acknowledgement are separate from Personal OS
+consumer inspection and acceptance of the whole goal. The BB result page reads
+that distinction; it has no Delivery accept or profile-adoption action. The exact
+profile RPC/CLI uses mission/profile/version/hash and exposes only proposed
+criteria, scenarios and example descriptions, without source locators or clickable
+private references. See the [plugin read contract](../plugins/personal-os/README.md#native-delivery-and-exact-profile-reads)
+and Personal OS integration contracts §36 for fields and limits.
+
+These additions describe implemented source boundaries. They do not add a new live
+verification claim to the checkpoints below.
+
 ## Eight reviewed directions
 
 | Direction | Existing capability | Remaining integration |
@@ -354,3 +376,15 @@ overall acceptance stays blocked. The distinction is explicit in the UI. The ful
 hash and matrix remained unchanged across independent owner reads. Existing drafts, routes and
 board layout were not changed by this slice. Evidence remains in the isolated runtime as
 `evidence/readiness-exact-file-20261023.png`; no automated tests were run.
+
+
+Root's later 23 October manual pass opened the real native research Delivery in the exact result
+page: a positive reviewer report, blocked gate and pending protocol acceptance were distinct.
+The missing pinned anchors were shown as the reason, without changing the saved Delivery hash.
+The exact v1 profile opened, reloaded with current metadata, and returned to the result. Its sample
+cards explicitly describe proposed materials that were not viewed. An independent screenshot
+review led to clearer labels, criteria-first details and version/currentness. Evidence:
+`evidence/native-quality-delivery-final-20261023.png`, `quality-profile-final-20261023.png` and
+`native-quality-ui-manual-20261023.json.gz`. Final targeted typecheck/prepare and plugin build/reload
+passed. No automated tests ran. This is a narrow research read/review path, not owner acceptance,
+a BB provider execution success, phone support or a 9/10 product claim.

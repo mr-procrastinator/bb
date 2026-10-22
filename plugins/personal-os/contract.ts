@@ -136,6 +136,21 @@ export const inputArtifactSchema = z.object({
   content: researchContentSchema, review: reviewSchema, noteCurrent: nullableFlag, candidateCurrent: nullableFlag, integrity: z.literal("sha256_verified"),
 });
 
+export const qualityProfileInputSchema = z.object({ missionId: missionIdSchema, profileId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/), version: z.number().int().min(1).max(999999999), profileHash: hashSchema }).strict();
+const profileStateSchema = z.object({ id: qualityProfileInputSchema.shape.profileId, description: boundedText(1000) });
+const profileCriterionSchema = z.object({ id: qualityProfileInputSchema.shape.profileId, description: boundedText(2000), state_ids: z.array(qualityProfileInputSchema.shape.profileId).max(12), evidence_required: boundedText(2000) });
+const publicProfileSampleSchema = z.object({ id: qualityProfileInputSchema.shape.profileId, description: boundedText(2000), reference_state: z.literal("reported") });
+const sourceProfileSampleSchema = publicProfileSampleSchema.omit({ reference_state: true }).transform(value => ({ ...value, reference_state: "reported" as const }));
+const publicProfileDimensionSchema = z.object({ id: z.enum(["accuracy", "ux", "visual", "resilience", "delivery"]), applicable: z.boolean(), applicability_reason: boundedText(2000),
+  criteria: z.array(profileCriterionSchema).max(20), states: z.array(profileStateSchema).max(12), examples: z.array(publicProfileSampleSchema).max(8), counterexamples: z.array(publicProfileSampleSchema).max(8) });
+const publicQualityProfileSchema = z.object({ profile_id: qualityProfileInputSchema.shape.profileId, version: qualityProfileInputSchema.shape.version, mission_id: missionIdSchema, profile_hash: hashSchema,
+  title: boundedText(200), minimum_score: z.literal(9), dimensions: z.array(publicProfileDimensionSchema).length(5), calibration: z.literal("unconfirmed"), references_verification: z.literal("reported"), owner_confirmed: z.literal(false) });
+const qualityProfileResponseFields = { scope: z.literal("proposed_personal_os_quality_profile"), state: z.enum(["available", "not_registered", "unavailable", "error"]),
+  context_current: nullableFlag, profile_current: nullableFlag, error_code: z.string().max(200).nullable(), completion_available: z.literal(false), native_gate_available: z.literal(false) };
+export const qualityProfileResponseSchema = z.object({ ...qualityProfileResponseFields, profile: publicQualityProfileSchema.nullable() });
+export const sourceQualityProfileResponseSchema = z.object({ ...qualityProfileResponseFields, profile: publicQualityProfileSchema.extend({ dimensions: z.array(publicProfileDimensionSchema.extend({
+  examples: z.array(sourceProfileSampleSchema).max(8), counterexamples: z.array(sourceProfileSampleSchema).max(8) })).length(5) }).nullable() });
+
 export const taskChatSchema = z.object({
   state: z.enum(["available", "unlinked", "unavailable"]), task_id: taskIdSchema, mission_id: missionIdSchema.nullable(),
   task_version: z.number().int().positive().nullable(), current_context_hash: hashSchema.nullable(), task_current: nullableFlag, context_current: nullableFlag, can_open: z.boolean(),
@@ -156,9 +171,22 @@ export const openTaskChatResultSchema = z.union([
 
 export const taskExecutionIdSchema = z.string().regex(/^task_execution_[a-f0-9]{32}$/);
 export const taskResultInputSchema = taskChatInputSchema.extend({ bindingId: taskExecutionIdSchema }).strict();
+const nativeDeliveryIdSchema = z.string().min(1).max(200).refine(value => value.trim().length > 0 && ![".", ".."].includes(value) && !/[\\/\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(value));
+const nativeDeliveryArtifactSchema = z.object({ name: z.enum(["research.json", "code.json", "proposal.patch", "proposal.bundle"]), sha256: hashSchema, size: z.number().int().nonnegative().max(8 * 1024 * 1024) });
+export const domainDeliverySchema = z.object({
+  scope: z.literal("native_domain_delivery"), state: z.enum(["available", "not_assessed", "unavailable", "error"]),
+  item: z.object({ delivery_id: nativeDeliveryIdSchema, delivery_hash: hashSchema, review_run_id: nativeDeliveryIdSchema, delegation_id: nativeDeliveryIdSchema,
+    revision: z.number().int().positive(), attempt_id: nativeDeliveryIdSchema, input_hash: hashSchema, context_hash: hashSchema.nullable(), request_hash: hashSchema,
+    profile: z.object({ id: nativeDeliveryIdSchema, version: z.number().int().positive(), hash: hashSchema }), artifact_refs: z.array(nativeDeliveryArtifactSchema).min(1).max(20), artifact_set_hash: hashSchema,
+    scope: z.literal("bounded_packet_research"), state: z.enum(["passed", "blocked", "failed"]), outcome: z.enum(["pass", "fail", "unknown", "not_run"]),
+    acceptance: z.enum(["pending", "accepted", "historical"]), current: z.boolean(), created_at: timestampSchema,
+    gate_blockers: z.array(z.enum(["calibration_not_pinned", "review_not_passed", "binding_changed", "evidence_changed", "review_failed", "gate_conditions_unconfirmed"])).max(6).nullable().optional() }).nullable(),
+  currentness: z.enum(["current", "historical", "unknown"]), snapshot_current: nullableFlag, context_current: nullableFlag, total_count: z.number().int().nonnegative().nullable(),
+  truncated: z.boolean(), error_code: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).nullable(), files: z.literal("not_rechecked"), mission_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
+}).refine(value => (value.state === "available") === (value.item !== null) && (value.currentness !== "current" || value.snapshot_current === true && value.context_current === true && value.item?.current === true));
 const taskResearchReceiptSchema = publicArtifactSchema.extend({ acceptance: z.literal("verification_pending"), availability: z.literal("not_rechecked") });
 const sourceTaskResearchReceiptSchema = taskResearchReceiptSchema.extend({
-  receipt_id: z.string().min(1).max(200), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/), revision: z.number().int().positive(),
+  receipt_id: z.string().min(1).max(200), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/), revision: z.number().int().positive(), input_hash: hashSchema.nullable().optional(),
 });
 const readinessIdentitySchema = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
 const readinessCountSchema = z.number().int().nonnegative();
@@ -191,7 +219,7 @@ export const taskExecutionBindingSchema = z.object({
   continuation: z.object({ id: z.string().regex(/^continuation_[a-f0-9]{32}$/), delegation_id: z.string().regex(/^delegation_[a-f0-9]{32}$/), attempt_id: z.string().regex(/^attempt_[a-f0-9]{32}$/).nullable(),
     revision: z.number().int().positive(), phase: z.string().min(1).max(100), launch_count: z.union([z.literal(0), z.literal(1)]), error_code: z.string().max(200).nullable(), created_at: timestampSchema, updated_at: timestampSchema }),
   artifact: z.object({ state: z.enum(["received", "not_received", "unavailable", "error"]), error_code: z.string().max(200).nullable(), receipt: taskResearchReceiptSchema.nullable() }),
-  review: taskReviewSchema, input_result: taskInputResultSchema, live_process_verified: z.literal(false), domain_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
+  review: taskReviewSchema, domainDelivery: domainDeliverySchema, input_result: taskInputResultSchema, live_process_verified: z.literal(false), domain_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
 });
 const sourceTaskExecutionBindingSchema = taskExecutionBindingSchema.extend({
   artifact: taskExecutionBindingSchema.shape.artifact.extend({ receipt: sourceTaskResearchReceiptSchema.nullable() }),
@@ -204,10 +232,10 @@ const dispatcherSchema = z.object({
 const executionCollectionFields = { state: z.enum(["available", "not_registered", "unavailable", "error"]), total_count: z.number().int().nonnegative().nullable(), truncated: z.boolean(), error_code: z.string().max(200).nullable() };
 const completionArtifactSchema = taskResearchReceiptSchema.extend({
   binding_id: taskExecutionIdSchema, bound_task_version: z.number().int().positive(), task_version_current: nullableFlag, task_context_current: nullableFlag,
-  currentness: z.enum(["current", "historical", "unknown"]),
+  currentness: z.enum(["current", "historical", "unknown"]), domainDelivery: domainDeliverySchema,
 });
 const sourceCompletionArtifactSchema = completionArtifactSchema.extend({
-  receipt_id: z.string().regex(/^artifact_receipt_[a-f0-9]{32}$/), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/), revision: z.number().int().positive(),
+  input_hash: hashSchema.nullable().optional(), receipt_id: z.string().regex(/^artifact_receipt_[a-f0-9]{32}$/), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/), revision: z.number().int().positive(),
 });
 const completionReviewSchema = z.object({
   id: z.string().regex(/^consumer_review_[a-f0-9]{32}$/), candidate_id: z.string().max(200), outcome: z.enum(["no_blocking_findings", "changes_required", "inconclusive"]),
@@ -237,13 +265,17 @@ const taskActivitySchema = z.object({
   items: z.array(taskActivityItemSchema).max(50), total_count: z.number().int().nonnegative().nullable(), truncated: z.boolean(), error_code: z.string().max(200).nullable(),
   read_at: timestampSchema, live_process_verified: z.literal(false), completion_available: z.literal(false),
 });
+function deliveryMatchesReceipt(delivery: z.infer<typeof domainDeliverySchema>, receipt: { did: string; aid: string; revision: number; input_hash?: string | null; name: string; sha256: string; size: number } | null) {
+  const item = delivery.item;
+  return item === null || receipt !== null && item.delegation_id === receipt.did && item.attempt_id === receipt.aid && item.revision === receipt.revision && item.input_hash === receipt.input_hash && item.artifact_refs.length === 1 && item.artifact_refs[0].name === receipt.name && item.artifact_refs[0].sha256 === receipt.sha256 && item.artifact_refs[0].size === receipt.size;
+}
 export const sourceTaskActivitySchema = taskActivitySchema.extend({ items: z.array(sourceTaskActivityItemSchema).max(50) })
-  .refine(value => value.items.every(item => item.completion.task_version === item.task.version && item.completion.context_current === item.task.context_current && item.bindings.items.every(binding => binding.review.readiness === null || binding.review.readiness.candidate_id === binding.review.candidate_id && binding.review.readiness.review_id === binding.review.review_id) && item.completion.items.every(ground => ground.review === null || ground.review.readiness === null || ground.review.readiness.candidate_id === ground.review.candidate_id && ground.review.readiness.review_id === ground.review.id) && (item.completion.state !== "recorded" || item.task.state === "done") && item.bindings.items.every(binding => binding.currentness !== "current" || (binding.task_version_current === true && binding.task_context_current === true && binding.bound_task_version === item.task.version && item.task.context_current === true)) && item.dispatchers.items.every(dispatcher => !dispatcher.task_version_current || dispatcher.bound_task_version === item.task.version)));
+  .refine(value => value.items.every(item => item.completion.task_version === item.task.version && item.completion.context_current === item.task.context_current && item.bindings.items.every(binding => deliveryMatchesReceipt(binding.domainDelivery, binding.artifact.receipt)) && item.completion.items.every(ground => ground.artifact === null || deliveryMatchesReceipt(ground.artifact.domainDelivery, ground.artifact)) && item.bindings.items.every(binding => binding.review.readiness === null || binding.review.readiness.candidate_id === binding.review.candidate_id && binding.review.readiness.review_id === binding.review.review_id) && item.completion.items.every(ground => ground.review === null || ground.review.readiness === null || ground.review.readiness.candidate_id === ground.review.candidate_id && ground.review.readiness.review_id === ground.review.id) && (item.completion.state !== "recorded" || item.task.state === "done") && item.bindings.items.every(binding => binding.currentness !== "current" || (binding.task_version_current === true && binding.task_context_current === true && binding.bound_task_version === item.task.version && item.task.context_current === true)) && item.dispatchers.items.every(dispatcher => !dispatcher.task_version_current || dispatcher.bound_task_version === item.task.version)));
 const taskResultSchema = z.object({
   taskId: taskIdSchema, missionId: missionIdSchema, bindingId: taskExecutionIdSchema, boundTaskVersion: z.number().int().positive(), currentness: z.enum(["current", "historical", "unknown"]),
   taskVersionCurrent: nullableFlag, taskContextCurrent: nullableFlag, artifact: publicArtifactSchema, content: researchContentSchema, review: taskReviewSchema,
   completionEvidence: z.object({ taskVersion: z.number().int().positive(), contextCurrent: nullableFlag, items: z.array(completionEvidenceSchema).max(30) }).nullable(),
-  activityReadAt: timestampSchema, integrity: z.literal("sha256_verified"),
+  domainDelivery: domainDeliverySchema, activityReadAt: timestampSchema, integrity: z.literal("sha256_verified"),
 });
 
 export const lookupInputSchema = z.object({
@@ -294,6 +326,7 @@ export const personalOsHostContract = defineRpcContract({
   listInputs: { input: listInputsInputSchema, output: readResultSchema(inputListSchema) },
   getInput: { input: getInputInputSchema, output: readResultSchema(inputDetailResponseSchema) },
   getInputArtifact: { input: inputArtifactInputSchema, output: readResultSchema(inputArtifactSchema) },
+  getQualityProfile: { input: qualityProfileInputSchema, output: readResultSchema(qualityProfileResponseSchema) },
   getTaskChat: { input: taskChatInputSchema, output: readResultSchema(taskChatSchema) },
   getTaskActivity: { input: taskChatInputSchema, output: readResultSchema(taskActivitySchema) },
   getMissionActivity: { input: missionInputSchema, output: readResultSchema(taskActivitySchema) },
@@ -309,6 +342,8 @@ export const personalOsContract = defineRpcContract({
 
 export type PersonalOsContract = typeof personalOsContract;
 export type CandidateReadiness = z.infer<typeof candidateReadinessSchema>;
+export type DomainDeliveryRead = z.infer<typeof domainDeliverySchema>;
+export type QualityProfileResult = z.infer<typeof personalOsContract.getQualityProfile.output>;
 export type Mission = z.infer<typeof missionSchema>;
 export type Task = z.infer<typeof publicTaskSchema>;
 export type TaskList = z.infer<typeof taskListSchema>;

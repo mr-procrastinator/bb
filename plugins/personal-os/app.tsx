@@ -5,7 +5,7 @@ import { definePluginApp, experimental_usePluginId, useBbNavigate, useRpc } from
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { z } from "zod";
-import { submitInputSchema, type CandidateReadiness, type InputArtifactResult, type InputDetail, type InputDetailResult, type InputItem, type InputsResult, type Mission, type MissionActivityResult, type MissionResult, type MissionsResult, type OpenTaskChatResult, type PartialResult, type PersonalOsContract, type SubmitInput, type SubmissionLookupResult, type Task, type TaskActivityItem, type TaskActivityResult, type TaskChatResult, type TaskExecutionBinding, type TaskResult, type TasksResult } from "./contract.js";
+import { qualityProfileInputSchema, submitInputSchema, type CandidateReadiness, type DomainDeliveryRead, type InputArtifactResult, type InputDetail, type InputDetailResult, type InputItem, type InputsResult, type Mission, type MissionActivityResult, type MissionResult, type MissionsResult, type OpenTaskChatResult, type PartialResult, type PersonalOsContract, type QualityProfileResult, type SubmitInput, type SubmissionLookupResult, type Task, type TaskActivityItem, type TaskActivityResult, type TaskChatResult, type TaskExecutionBinding, type TaskResult, type TasksResult } from "./contract.js";
 
 const PANEL_PATH = "personal-os";
 const columns = [
@@ -559,10 +559,12 @@ function readinessBlockerLabel(blocker: CandidateReadiness["blockers"][number]) 
   return (dimension ? dimension.label + ": " : "") + (labels[blocker.code] ?? "Осталось препятствие для проверки результата");
 }
 
-function ReadinessSummary({ readiness, candidateId, reviewId }: { readiness: CandidateReadiness | null; candidateId: string | null; reviewId: string | null }) {
+function ReadinessSummary({ readiness, candidateId, reviewId, missionId }: { readiness: CandidateReadiness | null; candidateId: string | null; reviewId: string | null; missionId: string }) {
+  const navigate = useBbNavigate();
   if (!candidateId || !reviewId) return null;
   const exact = readiness?.candidate_id === candidateId && readiness.review_id === reviewId ? readiness : null;
   const available = exact?.state === "available";
+  const profileSelection = exact?.profile ? qualityProfileInputSchema.safeParse({ missionId, profileId: exact.profile.profile_id, version: exact.profile.version, profileHash: exact.profile.profile_hash }) : null;
   const coverage = available ? exact.coverage?.criterion_states : null;
   const remaining = new Map<string, number>();
   if (available) for (const blocker of exact.blockers) {
@@ -571,7 +573,7 @@ function ReadinessSummary({ readiness, candidateId, reviewId }: { readiness: Can
     remaining.set(label, (remaining.get(label) ?? 0) + 1);
   }
   const stateLabel = !exact || ["unavailable", "error"].includes(exact.state) ? "Данные проверки недоступны" : exact.state === "not_assessed" ? "Проверка по профилю не записана" : exact.readiness === "stale" || exact.context_current === false || exact.profile_current === false ? "Данные проверки устарели" : exact.readiness === "blocked" ? "Есть препятствия для приёмки цели" : "Оценка готовности не подтверждена";
-  return <section className="space-y-3 rounded-md border border-border p-3" aria-label="Проверка результата по профилю цели"><div className="space-y-1"><h4 className="text-sm font-medium">Проверка по профилю цели</h4><p className="text-xs text-muted-foreground">{stateLabel}</p></div>{available && <>{exact.coverage && <p className="text-xs">Область отчёта: {exact.coverage.requirements.review_evidence_covered} из {exact.coverage.requirements.total} требований цели.</p>}<dl className="space-y-1 text-xs">{readinessDimensions.map(dimension => {
+  return <section className="space-y-3 rounded-md border border-border p-3" aria-label="Проверка результата по профилю цели"><div className="space-y-1">{profileSelection?.success && <Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: profilePath(profileSelection.data) })}>Профиль и образцы →</Button>}<h4 className="text-sm font-medium">Проверка по профилю цели</h4><p className="text-xs text-muted-foreground">{stateLabel}</p></div>{available && <>{exact.coverage && <p className="text-xs">Область отчёта: {exact.coverage.requirements.review_evidence_covered} из {exact.coverage.requirements.total} требований цели.</p>}<dl className="space-y-1 text-xs">{readinessDimensions.map(dimension => {
     const score = exact.dimension_scores.find(item => item.dimension_id === dimension.id);
     return <div key={dimension.id} className="flex flex-wrap justify-between gap-x-3 gap-y-1"><dt className="text-muted-foreground">{dimension.label}</dt><dd>{score?.applicable === false ? "Не применяется" : score?.score === null || !score ? "Оценка не записана" : "Оценка в записи: " + score.score + "/10"}</dd></div>;
   })}</dl><p className="text-xs">Записей о проверках состояний: {coverage ? coverage.reported_checked + " из " + coverage.total : "количество неизвестно"}.</p><p className="text-xs text-muted-foreground">Это область отчёта, не выполненные требования. В записях возможны неизвестные состояния и невыполненные проверки.</p></>}<ul className="space-y-1 text-xs text-muted-foreground"><li>Согласование образцов не подтверждено.</li><li>Независимость проверки не подтверждена.</li></ul>{remaining.size > 0 && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Другие препятствия · {[...remaining.values()].reduce((total, count) => total + count, 0)}</summary><ul className="space-y-1 pt-2 text-muted-foreground">{[...remaining].map(([label, count]) => <li key={label}>{label}{count > 1 ? " · " + count : ""}.</li>)}</ul></details>}{available && (exact.truncated || exact.blocker_count !== null && exact.blocker_count > exact.blockers.length) && <p className="text-xs text-muted-foreground">Показана только полученная часть препятствий.</p>}{available && exact.blocker_count === null && <p className="text-xs text-muted-foreground">Полнота списка препятствий неизвестна.</p>}</section>;
@@ -581,7 +583,7 @@ function ExecutionStages({ binding, task, showReadiness = true }: { binding: Tas
   const navigate = useBbNavigate();
   const hasReceipt = binding.artifact.state === "received" && binding.artifact.receipt !== null;
   const fileLabel = hasReceipt ? "Получение записано; файл ещё не перечитан" : binding.artifact.state === "not_received" ? "Файл не получен" : "Сведения о файле недоступны";
-  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="grid gap-4 sm:grid-cols-3"><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Исполнение</h3><p className="text-sm">{executionPhaseLabels[binding.continuation.phase] ?? "Фаза неизвестна"}</p></div><div className="space-y-2"><h3 className="text-xs text-muted-foreground">Файл</h3><p className="text-sm">{fileLabel}</p>{hasReceipt && <Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + task.mission_id + "/task/" + task.id + "/result/" + binding.id })}>Проверить и прочитать →</Button>}</div><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Проверка файла</h3><p className="text-sm">{taskReviewLabel(binding.review, currentExecution(binding))}</p></div></div>{showReadiness && <ReadinessSummary key={binding.review.review_id + ":" + binding.review.readiness?.assessment_id} readiness={binding.review.readiness} candidateId={binding.review.candidate_id} reviewId={binding.review.review_id} />}{binding.input_result.state === "attached" && binding.input_result.note_id && <Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + binding.input_result.note_id })}>Результат добавлен в поручение →</Button>}<p className="text-xs text-muted-foreground">Сохранённые этапы попытки. Они не подтверждают работу процесса сейчас или приёмку цели.</p></section>;
+  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="grid gap-4 sm:grid-cols-3"><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Исполнение</h3><p className="text-sm">{executionPhaseLabels[binding.continuation.phase] ?? "Фаза неизвестна"}</p></div><div className="space-y-2"><h3 className="text-xs text-muted-foreground">Файл</h3><p className="text-sm">{fileLabel}</p>{hasReceipt && <Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + task.mission_id + "/task/" + task.id + "/result/" + binding.id })}>Проверить и прочитать →</Button>}</div><div className="space-y-1"><h3 className="text-xs text-muted-foreground">Проверка файла</h3><p className="text-sm">{taskReviewLabel(binding.review, currentExecution(binding))}</p></div></div>{showReadiness && <ReadinessSummary key={binding.review.review_id + ":" + binding.review.readiness?.assessment_id} readiness={binding.review.readiness} candidateId={binding.review.candidate_id} reviewId={binding.review.review_id} missionId={task.mission_id} />}{binding.input_result.state === "attached" && binding.input_result.note_id && <Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + binding.input_result.note_id })}>Результат добавлен в поручение →</Button>}<p className="text-xs text-muted-foreground">Сохранённые этапы попытки. Они не подтверждают работу процесса сейчас или приёмку цели.</p></section>;
 }
 
 type CompletionItem = TaskActivityItem["completion"]["items"][number];
@@ -604,7 +606,7 @@ function CompletionEvidence({ items, missionId, taskId, contextCurrent, showFile
     {showFiles && [...files.values()].map(file => <div key={file.binding_id} className="flex flex-wrap items-center justify-between gap-3"><div className="space-y-1"><p className="text-sm font-medium">Полученный файл исследования</p><p className="text-xs text-muted-foreground">{file.currentness === "historical" ? "Из прежней попытки" : file.currentness === "current" ? "Из попытки по текущим условиям" : "Актуальность попытки неизвестна"}</p></div><Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId + "/result/" + file.binding_id })}>Проверить и прочитать →</Button></div>)}
     {[...reviews.values()].map(review => {
       const applicable = contextCurrent === true && review.candidate_current === true && review.applicable === true;
-      return <section key={review.id} className="space-y-2"><h4 className="text-sm font-medium">Проверка, указанная при завершении</h4><p className="text-sm">{applicable ? outcomes[review.outcome] : "Записанный вывод: " + outcomes[review.outcome]}</p>{!applicable && <p className="text-xs text-muted-foreground">{review.applicable_at_recording ? "Когда проверку сохранили, она была применима. Текущая применимость не подтверждена." : "Применимость проверки к текущим условиям не подтверждена."}</p>}<ReadinessSummary key={review.id + ":" + review.readiness?.assessment_id} readiness={review.readiness} candidateId={review.candidate_id} reviewId={review.id} /></section>;
+      return <section key={review.id} className="space-y-2"><h4 className="text-sm font-medium">Проверка, указанная при завершении</h4><p className="text-sm">{applicable ? outcomes[review.outcome] : "Записанный вывод: " + outcomes[review.outcome]}</p>{!applicable && <p className="text-xs text-muted-foreground">{review.applicable_at_recording ? "Когда проверку сохранили, она была применима. Текущая применимость не подтверждена." : "Применимость проверки к текущим условиям не подтверждена."}</p>}<ReadinessSummary key={review.id + ":" + review.readiness?.assessment_id} readiness={review.readiness} candidateId={review.candidate_id} reviewId={review.id} missionId={missionId} /></section>;
     })}
     {recordedOnly > 0 && <p className="text-xs text-muted-foreground">Сохранено источников без проверки содержимого в этой проекции: {recordedOnly}.</p>}
     {unavailable > 0 && <p className="text-xs text-muted-foreground" role="status">Часть записанных оснований прочитать не удалось.</p>}
@@ -650,6 +652,72 @@ function TaskActivity({ task, refreshNonce }: { task: Task; refreshNonce: number
   </>}</section>;
 }
 
+type ProfileSelection = z.infer<typeof qualityProfileInputSchema>;
+const profilePath = (selection: ProfileSelection) => "mission/" + selection.missionId + "/profile/" + selection.profileId + "/" + selection.version + "/" + selection.profileHash;
+
+function QualityProfilePage({ selection }: { selection: ProfileSelection }) {
+  const rpc = useRpc<PersonalOsContract>();
+  const navigate = useBbNavigate();
+  const [result, setResult] = useState<QualityProfileResult | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setResult(null);
+    setFailed(false);
+    void rpc.call("getQualityProfile", selection).then(value => { if (active) setResult(value); }).catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [rpc, selection.missionId, selection.profileId, selection.version, selection.profileHash, revision]);
+  const data = result?.state === "available" ? result.data : null;
+  const candidate = data?.state === "available" ? data.profile : null;
+  const profile = candidate?.mission_id === selection.missionId && candidate.profile_id === selection.profileId && candidate.version === selection.version && candidate.profile_hash === selection.profileHash ? candidate : null;
+  const profileStatus = data?.context_current === true && data.profile_current === true ? "Текущая версия" : data?.context_current === false || data?.profile_current === false ? "Историческая версия" : "Актуальность неизвестна";
+  return <main className="mx-auto flex w-full max-w-3xl flex-col gap-5 p-4 md:p-8">
+    <header className="flex flex-wrap justify-between gap-3"><Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + selection.missionId })}>← К задачам цели</Button><Button type="button" variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
+    <div className="space-y-2"><p className="text-xs text-muted-foreground">Предложенный профиль · согласование здесь не проверено</p><h1 className="text-xl font-semibold">{profile?.title ?? "Профиль и образцы"}</h1>{profile && <p className="text-xs text-muted-foreground">v{profile.version} · {profileStatus}</p>}</div>
+    {result === null && !failed ? <p className="text-sm text-muted-foreground" role="status">Читаем точную версию профиля…</p> : !profile ? <p className="text-sm text-muted-foreground" role="status">Эту версию профиля прочитать не удалось. Образцы и критерии неизвестны.</p> : <>
+      <p className="text-xs text-muted-foreground">Порог в предложении: {profile.minimum_score}/10. Описания образцов предложены; их источники не проверены.</p>
+      <div className="space-y-2">{profile.dimensions.map(dimension => {
+        const previewCriterion = dimension.criteria[0];
+        const previewState = previewCriterion ? dimension.states.find(state => previewCriterion.state_ids.includes(state.id)) : null;
+        return <details key={dimension.id} className="rounded-lg border border-border bg-card p-4">
+        <summary className="cursor-pointer text-sm font-medium">{readinessDimensions.find(item => item.id === dimension.id)?.label ?? "Направление"}<span className="ml-2 text-xs font-normal text-muted-foreground">Критерии: {dimension.criteria.length}{!dimension.applicable ? " · Не применяется" : ""}</span></summary>
+        <div className="space-y-4 pt-4">
+          <details className="text-sm"><summary className="cursor-pointer text-muted-foreground"><span>Критерии и состояния · {dimension.criteria.length}</span>{previewCriterion && <span className="mt-1 line-clamp-2 text-foreground">{previewCriterion.description}</span>}{previewState && <span className="mt-1 line-clamp-2 text-xs">Состояние: {previewState.description}</span>}</summary><div className="space-y-3 pt-3">{dimension.criteria.map(criterion => <section key={criterion.id} className="space-y-1"><PlainText text={criterion.description} /><p className="text-xs text-muted-foreground">Нужное основание</p><PlainText text={criterion.evidence_required} /></section>)}{dimension.states.length > 0 && <ul className="list-disc space-y-2 pl-4 text-xs text-muted-foreground">{dimension.states.map(state => <li key={state.id}>{state.description}</li>)}</ul>}</div></details>
+          <section className="space-y-1"><h2 className="text-xs font-medium">Почему</h2><PlainText text={dimension.applicability_reason} /></section>
+          <div className="grid gap-4 sm:grid-cols-2"><section className="space-y-2"><h2 className="text-sm font-medium">Описание желаемого образца</h2>{dimension.examples.length ? dimension.examples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><p className="text-xs text-muted-foreground">Материал не просмотрен</p></div>) : <p className="text-xs text-muted-foreground">Образцов нет в предложении.</p>}</section><section className="space-y-2"><h2 className="text-sm font-medium">Описание контрпримера</h2>{dimension.counterexamples.length ? dimension.counterexamples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><p className="text-xs text-muted-foreground">Материал не просмотрен</p></div>) : <p className="text-xs text-muted-foreground">Контрпримеров нет в предложении.</p>}</section></div>
+        </div>
+      </details>; })}</div>
+      <p className="text-xs text-muted-foreground">Просмотр не согласует образцы, не применяет профиль и не принимает поставку.</p>
+    </>}
+  </main>;
+}
+
+function NativeDelivery({ delivery, artifact }: { delivery: DomainDeliveryRead; artifact: { name: string; sha256: string; size: number } }) {
+  const item = delivery.state === "available" && delivery.item?.artifact_refs.some(ref => ref.name === artifact.name && ref.sha256 === artifact.sha256 && ref.size === artifact.size) ? delivery.item : null;
+  const current = item !== null && delivery.currentness === "current" && delivery.snapshot_current === true && delivery.context_current === true && item.current;
+  const check = item?.state === "blocked" ? "Приёмка заблокирована" : item?.state === "failed" ? "Проверка не пройдена" : "Проверка пройдена";
+  const blockers = item?.gate_blockers == null ? null : [...new Set(item.gate_blockers)];
+  const blockerLabels: Record<NonNullable<NonNullable<DomainDeliveryRead["item"]>["gate_blockers"]>[number], string> = {
+    calibration_not_pinned: "Образцы не закреплены в этой проверке",
+    review_not_passed: "Положительный вывод проверяющего не получен",
+    binding_changed: "Привязка проверки изменилась",
+    evidence_changed: "Основания проверки изменились",
+    review_failed: "Проверка завершилась ошибкой",
+    gate_conditions_unconfirmed: "Условия приёмки не подтверждены",
+  };
+  return <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Предметная проверка поставки исследования">
+    <h2 className="text-base font-semibold">Поставка исследования · AiweApps</h2>
+    {item ? <>
+      <p className="text-sm">{item.outcome === "pass" ? "Проверяющий дал положительный результат." : item.outcome === "fail" ? "Проверяющий указал на проблемы." : item.outcome === "not_run" ? "Результат проверяющего не получен: проверка не выполнена." : "Результат проверяющего неизвестен."}</p>
+      <dl className="grid gap-3 text-xs sm:grid-cols-3"><div className="space-y-1"><dt className="text-muted-foreground">Предметная проверка</dt><dd>{check}</dd></div><div className="space-y-1"><dt className="text-muted-foreground">Приёмка поставки в протоколе</dt><dd>{item.acceptance === "accepted" ? "Принятие записано" : item.acceptance === "historical" ? "Прежняя запись" : "Ожидается"}</dd></div><div className="space-y-1"><dt className="text-muted-foreground">Привязка</dt><dd>{current ? "Текущая" : delivery.currentness === "historical" ? "Историческая" : "Не подтверждена"}</dd></div></dl>
+      {blockers === null ? <p className="text-xs text-muted-foreground">Наличие препятствий в этой проверке неизвестно.</p> : blockers.length > 0 ? <><ul className="space-y-1 text-xs text-muted-foreground">{blockers.slice(0, 2).map(code => <li key={code}>{blockerLabels[code]}.</li>)}</ul>{blockers.length > 2 && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Другие причины · {blockers.length - 2}</summary><ul className="space-y-1 pt-2 text-muted-foreground">{blockers.slice(2).map(code => <li key={code}>{blockerLabels[code]}.</li>)}</ul></details>}</> : item.state === "blocked" ? <p className="text-xs text-muted-foreground">Причина блокировки не указана.</p> : null}
+      {!current && <p className="text-xs text-muted-foreground">{delivery.context_current === false ? "Условия цели изменились. Показана сохранённая поставка этого файла." : delivery.currentness === "historical" ? "Показана сохранённая поставка прежней попытки этого файла." : "Актуальность наблюдения поставки не подтверждена."}</p>}
+    </> : <p className="text-sm text-muted-foreground">{delivery.state === "not_assessed" ? "Предметная проверка поставки не записана." : "Данные предметной проверки этой поставки недоступны."}</p>}
+    <p className="text-xs text-muted-foreground">Проверка ограничена пакетом исследования. Она не подтверждает приёмку всей цели.</p>
+  </section>;
+}
+
 function TaskResultPage({ missionId, taskId, bindingId }: { missionId: string; taskId: string; bindingId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
@@ -667,9 +735,10 @@ function TaskResultPage({ missionId, taskId, bindingId }: { missionId: string; t
   const current = artifact?.currentness === "current" && artifact.taskVersionCurrent === true && artifact.taskContextCurrent === true;
   const historicalReview = artifact?.currentness === "historical" && artifact.completionEvidence?.contextCurrent === true && artifact.completionEvidence.items.some(item => item.state === "resolved" && item.kind === "consumer_review" && item.artifact?.binding_id === bindingId && item.review?.candidate_current === true && item.review.applicable === true);
   const repeatedReadiness = artifact?.completionEvidence?.items.some(item => item.state === "resolved" && item.kind === "consumer_review" && item.review?.id === artifact.review.review_id && item.review.candidate_id === artifact.review.candidate_id);
-  const attemptReadiness = artifact && !repeatedReadiness ? <ReadinessSummary key={artifact.review.review_id + ":" + artifact.review.readiness?.assessment_id} readiness={artifact.review.readiness} candidateId={artifact.review.candidate_id} reviewId={artifact.review.review_id} /> : null;
+  const attemptReadiness = artifact && !repeatedReadiness ? <ReadinessSummary key={artifact.review.review_id + ":" + artifact.review.readiness?.assessment_id} readiness={artifact.review.readiness} candidateId={artifact.review.candidate_id} reviewId={artifact.review.review_id} missionId={missionId} /> : null;
   return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex flex-wrap justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => artifact ? navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId }) : navigate.toPluginPanel(PANEL_PATH)}>{artifact ? "← К задаче" : "← Все цели"}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header><h1 className="text-xl font-semibold">Полученное исследование задачи</h1>{result === null && !failed && <p className="text-sm text-muted-foreground" role="status">Проверяем и читаем сохранённый файл…</p>}{failed || result !== null && !artifact ? <p className="text-sm text-muted-foreground" role="status">Файл прочитать не удалось. Его содержание не подтверждено этим чтением.</p> : null}{artifact && <>
     {!current && <p className="text-sm text-muted-foreground">{artifact.taskContextCurrent === false ? "Результат попытки по прежним условиям." : artifact.taskVersionCurrent === false ? "Результат из прежней версии задачи." : artifact.currentness === "historical" ? "Результат прежней попытки." : "Связь результата с текущими условиями не подтверждена."}</p>}
+    <NativeDelivery delivery={artifact.domainDelivery} artifact={artifact.artifact} />
     {artifact.completionEvidence && <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Основания завершения"><h2 className="text-base font-semibold">Основания отметки «Готово»</h2><p className="text-sm">Этот файл указан среди сохранённых оснований завершения задачи.</p><CompletionEvidence items={artifact.completionEvidence.items} missionId={missionId} taskId={taskId} contextCurrent={artifact.completionEvidence.contextCurrent} showFiles={false} /><p className="text-xs text-muted-foreground">Приёмка всей цели остаётся отдельной.</p></section>}
     <section className="space-y-2"><h2 className="text-base font-semibold">Итог по переданным материалам</h2><ReportBody text={artifact.content.summary} /><p className="text-xs text-muted-foreground">Выводы относятся к переданному пакету материалов, а не текущему статусу системы.</p></section>
     <section className="space-y-3"><h2 className="text-base font-semibold">Выводы</h2><ol className="list-decimal space-y-3 pl-5">{artifact.content.findings.map((finding, index) => <li key={index}><ReportBody text={finding.claim} /></li>)}</ol></section>
@@ -785,9 +854,12 @@ function PersonalOsPanel({ subPath }: { subPath: string }) {
   const onCompose = () => setOpenRequest(value => value + 1);
   const match = /^mission\/(mission_[a-f0-9]{32})(?:\/task\/(task_[a-f0-9]{32})(?:\/result\/(task_execution_[a-f0-9]{32}))?)?$/.exec(subPath);
   const inputMatch = /^input\/(note_[a-f0-9]{32})(?:\/result\/(input_result_[a-f0-9]{32}))?$/.exec(subPath);
+  const profileMatch = /^mission\/(mission_[a-f0-9]{32})\/profile\/([A-Za-z0-9_-]{1,100})\/([1-9][0-9]{0,8})\/([a-f0-9]{64})$/.exec(subPath);
+  const parsedProfile = profileMatch ? qualityProfileInputSchema.safeParse({ missionId: profileMatch[1], profileId: profileMatch[2], version: Number(profileMatch[3]), profileHash: profileMatch[4] }) : null;
+  const profileSelection = parsedProfile?.success ? parsedProfile.data : null;
   const overview = !subPath || !!match && !match[2];
   return <div className="min-h-0 flex-1 overflow-y-auto">
-    {!subPath ? <MissionList key="mission-list" onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div key="unsupported-route" className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}
+    {!subPath ? <MissionList key="mission-list" onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : profileSelection ? <QualityProfilePage key={"quality-profile:" + profileSelection.missionId + ":" + profileSelection.profileId + ":" + profileSelection.version + ":" + profileSelection.profileHash} selection={profileSelection} /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div key="unsupported-route" className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}
     <div key="owner-composer" hidden={!overview} className="px-4 pb-4 md:px-6"><InputComposer missionId={match?.[1] ?? null} onSaved={() => setInputRevision(value => value + 1)} onStatus={setComposeLabel} openRequest={openRequest} composerId={composerId} /></div>
     {overview && <div key={"recent-inputs:" + (match?.[1] ?? "personal")} className="px-4 pb-6 md:px-6"><details className="mx-auto w-full max-w-5xl rounded-lg border border-border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">Мои поручения и результаты</summary><InputList key={"input-list:" + (match?.[1] ?? "personal")} missionId={match?.[1] ?? null} refreshRevision={inputRevision} /></details></div>}
   </div>;

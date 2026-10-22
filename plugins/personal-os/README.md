@@ -125,6 +125,39 @@ added. Calibration, independence and profile adoption remain unconfirmed; openin
 the projection never performs inspection, checks files or completes work. Profile
 payloads, source locators and actor metadata stay on the owner.
 
+## Native Delivery and exact profile reads
+
+`TaskExecutionBinding.domainDelivery`, completion-file grounds and
+`TaskResult.data.domainDelivery` expose only an exact received file's saved native
+Delivery metadata. Personal OS reads the existing synchronized snapshot; GET does
+not contact AiweApps, inspect files, create schema, or run a reviewer. The native
+collection contains at most five deliveries with total count and truncation.
+DID/revision/attempt/input/request/profile and artifact hashes are bound before
+selecting a record. Historical profile hashes remain native-owner attestations;
+private resolved profiles are not copied or independently revalidated here. A historical R1 file cannot inherit R2's result. Missing,
+contradictory or omitted history stays unavailable; known absence is not_assessed.
+
+`passed`, the outcome and native `acceptance` are separate fields. Native acceptance
+is an acknowledgement for that bounded research delivery, not task completion,
+mission acceptance, or an owner quality rating. `files:not_rechecked` describes Delivery metadata; the separate exact artifact
+read verifies bytes without rewriting that metadata. Legacy `execution.quality_gate:not_run` and
+immutable result manifests are unchanged. An old missing input hash leaves Delivery
+unknown without hiding the existing task or received file.
+
+`getQualityProfile({missionId,profileId,version,profileHash})` and the CLI below use
+only the fixed exact-version owner route. The host checks all four identities and
+returns proposed criteria, states and example/counterexample descriptions. Source
+locators, reference hashes, credentials and private policy are omitted. Historical
+profiles retain their currentness flags; reading a profile does not adopt it or
+verify its declared examples.
+
+```sh
+bb personal-os quality-profile <mission_id> <profile_id> <version> <profile_hash>
+```
+
+These are source-level read capabilities. Deployment, build and manual UI results
+must be recorded separately; this section does not establish a live pass.
+
 ## Instructions, results and linked chats
 
 `listInputs` reads up to 20 personal instructions by default, or instructions for
@@ -214,6 +247,8 @@ Reads use only GET `/api/missions`, `/api/missions/<mission_id>` and
 exact note/result artifact routes, and `/api/task-chat-links?task_id=<task_id>`.
 Task activity uses only `/api/task-execution?task_id=<task_id>` or the fixed
 mission batch query, and `/api/task-execution/<binding_id>/artifact?task_id=<task_id>`.
+Exact profiles use `/api/quality/profile-versions/<profile_id>?version=<version>&hash=<sha256>`
+with a 128 KiB reply limit.
 Responses are limited to 2 MiB for goals/tasks, 1 MiB for inbox lists, 512 KiB for
 instruction details and exact artifact bytes, 1 MiB for task activity and 64 KiB for chat bindings;
 100 goals and 500 tasks; requests time out after five seconds. IDs and responses

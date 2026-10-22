@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
-import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
+import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, sourceQualityProfileResponseSchema, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
 
 const BASE_URL = "http://127.0.0.1:7317";
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -155,6 +155,7 @@ async function readTaskResult(taskId: string, bindingId: string, signal: AbortSi
     artifact: { name: artifact.name, sha256: artifact.sha256, size: artifact.size }, content: content.data,
     review: binding?.review ?? { state: "unavailable", run_id: null, run_phase: null, outcome: null, review_id: null, candidate_id: null, candidate_current: null, applicable: null, error_code: null, readiness: null },
     completionEvidence: grounds.length ? { taskVersion: task.completion.task_version, contextCurrent: task.completion.context_current, items: grounds } : null,
+    domainDelivery: binding?.domainDelivery ?? completionArtifact!.domainDelivery,
     activityReadAt: activity.data.read_at, integrity: "sha256_verified",
   } };
 }
@@ -225,6 +226,10 @@ export default experimental_defineHostEntry({
     },
     getInput(input, context) { return readInput(input.noteId, context.signal); },
     getInputArtifact(input, context) { return readInputArtifact(input.noteId, input.resultId, context.signal); },
+    getQualityProfile(input, context) {
+      const path = "/api/quality/profile-versions/" + encodeURIComponent(input.profileId) + "?version=" + input.version + "&hash=" + input.profileHash;
+      return read(path, sourceQualityProfileResponseSchema.refine(value => value.state === "available" ? value.profile !== null && value.profile.mission_id === input.missionId && value.profile.profile_id === input.profileId && value.profile.version === input.version && value.profile.profile_hash === input.profileHash : value.profile === null), context.signal, 128 * 1024);
+    },
     getTaskChat(input, context) {
       return read("/api/task-chat-links?task_id=" + encodeURIComponent(input.taskId), taskChatSchema.refine(value => value.task_id === input.taskId), context.signal, 65536);
     },
