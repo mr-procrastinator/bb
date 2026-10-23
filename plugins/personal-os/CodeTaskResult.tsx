@@ -37,6 +37,7 @@ export function CodeTaskResult({ missionId, taskId, bindingId, renderDelivery }:
     {data && <>
       <section className="space-y-3 rounded-lg border border-border bg-card p-4">
         <p className="text-sm font-medium">{produced ? "Комплект сохранён: отчёт, patch и bundle" : "Полный комплект кода не получен"}</p>
+        <p className="text-xs text-muted-foreground">Сообщение исполнителя</p>
         <p className="whitespace-pre-wrap break-words text-sm">{data.content.summary || "Итог в отчёте не указан."}</p>
         <p className="text-xs text-muted-foreground">{data.currentness === "current" && data.taskVersionCurrent === true && data.taskContextCurrent === true ? "Попытка соответствует текущей версии задачи и её условиям." : data.taskContextCurrent === false ? "Результат по прежним условиям задачи." : data.taskVersionCurrent === false ? "Результат прежней версии задачи." : data.currentness === "historical" ? "Результат прежней попытки." : "Актуальность попытки не подтверждена."}</p>
         {!produced && <p className="text-xs text-muted-foreground">Сохранён отчёт о неудаче{data.content.error_code ? " · " + data.content.error_code : ""}. Доступные файлы показаны ниже.</p>}
@@ -47,7 +48,7 @@ export function CodeTaskResult({ missionId, taskId, bindingId, renderDelivery }:
           <summary className="flex cursor-pointer flex-wrap justify-between gap-2 text-sm"><span className="font-medium">{file.name}</span><span className="text-muted-foreground">{file.size.toLocaleString("ru-RU")} байт</span></summary>
           <p className="break-all pt-3 font-mono text-xs text-muted-foreground">SHA-256 · {file.sha256}</p>
         </details>)}</div>
-        <p className="text-xs text-muted-foreground">Personal OS перечитала сохранённые файлы и проверила их SHA-256. BB отдельно проверил hash отчёта. Код не применялся.</p>
+        <p className="text-xs text-muted-foreground">Personal OS перечитала сохранённые файлы и проверила их SHA-256. BB отдельно проверил hash отчёта. Просмотр только читает сохранённый пакет.</p>
       </section>
       {renderDelivery(data.domainDelivery, data.artifact, data.artifacts)}
       <section className="space-y-3 rounded-lg border border-border p-4">
