@@ -39,8 +39,9 @@ requirements and owner contracts stay in their own project documents.
 the configured host entry. Only the host reads `http://127.0.0.1:7317`, so a future cloud BB server
 does not mistake its own localhost for the user's Mac. No public Personal OS port or browser credentials.
 Reads cover goals/tasks, bounded instruction lists/details, explicit task activity and exact attached
-or task-bound research results. Bounded text input uses only the existing personal-inbox or pinned-goal
-input POST. There is no arbitrary URL, redirect or browser-selected host.
+or task-bound research results. Bounded input uses the existing personal-inbox,
+pinned-goal or exact task/version/context POST; local question answers use the existing
+decision owner. There is no arbitrary URL, redirect or browser-selected host.
 `/api/control` is excluded: its skill catalog snapshot can write skill-version observations.
 
 The default panel opens the task board when exactly one goal is active; otherwise it shows
@@ -56,13 +57,25 @@ Owner input fixes one UUID, exact text, target, goal version and enrolled host b
 The plugin stores that command before contacting Personal OS. Retry reuses it and the owner's
 idempotency key; an uncertain outcome does not create a new UUID. The browser preserves its draft
 and pending request across reload, without automatic submission. General input stays in the personal
-inbox. Goal input requires the explicit goal/version. No task-status write, dispatch or automatic
-execution is added. Browser dictation adds final recognized text to that same protected draft;
+inbox. Goal input requires the explicit goal/version. **Дополнить задачу** reuses the
+composer and pins the task ID/version, goal ID/version and semantic context hash. Existing
+text needs an explicit rebind; pending requests keep their original target. The owner
+atomically saves note and binding without changing task state/version. Triage uses that
+pinned snapshot without publishing a duplicate task. No dispatch or automatic execution
+is added. Browser dictation adds final recognized text to that same protected draft;
 it never submits. The owner stops capture, checks the text and presses **Добавить** separately.
 Unsupported browsers or denied microphone permission retain text input. A browser speech service
 may process audio externally; the plugin sends only text with optional `inputKind:voice`.
 Microphone capture and speech recognition in external Chrome or on a phone remain unverified. Detailed limits and
 recovery behavior live in the [plugin guide](../plugins/personal-os/README.md#voice-drafting).
+
+The board also reads bounded local owner questions. Answers pin the exact question,
+mission/version/context, UUID, response and configured-host hash before sending. Host
+changes or uncertain HTTP outcomes preserve pending recovery; the same POST can recover
+the original receipt even after the question is resolved or absent from a limited read.
+A confirmed answer records a local choice, not a grant, native delivery or execution.
+RPC and CLI (`owner-actions`, `answer-owner-action`, `submit-task`) share these owner
+paths; see [commands and recovery](../plugins/personal-os/README.md#local-owner-questions-and-answers).
 
 ## Task activity and result views
 
@@ -86,10 +99,10 @@ The overview starts with the goal and four task columns. Completed work shows th
 with an explicit expansion of the received list; this order does not claim completion recency.
 The top input action opens and focuses the existing composer. A single plugin scroll viewport covers
 all route content, the composer and recent instructions, inside BB's constrained host pane.
-The composer and recent-instruction list appear only on overview pages. The composer remains mounted
-while hidden on task/instruction/result pages, preserving the draft and pending request. Route keys
+The recent-instruction list appears only on overview pages. A task can explicitly open
+the same composer; other hidden routes preserve its draft and pending request. Route keys
 have separate component prefixes; board → task → back must leave one instruction list on the board
-and none on the detail. Manual refresh is still explicit. Returning from a task does not establish
+and none on the detail. Explicit refresh and confirmed saves reread the relevant views. Returning from a task does not establish
 that every saved task field was reread.
 
 The two full research readers render report text as restricted Markdown, including GFM tables with
@@ -141,7 +154,9 @@ criteria, scenarios and example descriptions without source locators. A separate
 sample ID. It displays bounded PNG/JPEG or plain text only when the owner-pinned SHA-256
 matches the returned bytes. Missing pins, changed files and unsupported sources stay
 unavailable; another version or sample is never substituted. The preview does not confirm
-anchors, calibrate a reviewer or accept a profile. It does not expose a private source URL.
+anchors, calibrate a reviewer or accept a profile. **Во весь размер** expands that same
+verified image inline, with 100% scrolling, fit-to-width and Escape to collapse. It does
+not refetch another file or add an acceptance action. Private source URLs remain hidden.
 See the [plugin read contract](../plugins/personal-os/README.md#native-delivery-and-exact-profile-reads)
 and Personal OS integration contracts §36 for fields and limits.
 
@@ -419,5 +434,13 @@ Stopped-triage labels passed source review; no failed model was deliberately cre
 Targeted typecheck/prepare completed nine build tasks; official plugin build/reload succeeded. No tests ran.
 Runtime captures: `evidence/director-board-final-20261023.png` and
 `evidence/quality-reference-{image,text,stale}-20261023.png` under the isolated BB data directory.
-Independent screenshot review still found two gaps: a concrete owner-decision action and a full-size
-sample view. Actual microphone/audio, phone access and owner acceptance remain unverified.
+The subsequent slice adds current local questions with explicit answers, pending recovery and a full-size
+sample view. Source review covers host-pinned exact retries and shared Web Locks. Root observed zero
+current local questions plus one historical answer; no new owner answer was submitted. Full-size,
+fit and Escape reused the verified image. After fixing an implicit grid overflow, the page measured
+1356/1356px and the inner image viewport 644/1676px. Root also saved a task-bound input, observed a real
+director plan without changing any of the 17 task rows, and followed an exact published task link.
+A fresh task-bound draft retained its text and version after reload and was cleared without submission.
+The final refreshNonce fix has source review and a successful build; another post-save submission and
+concurrent browser answers were not exercised. Actual microphone/audio, phone access, the full
+execution/correction cycle and owner acceptance remain unverified.

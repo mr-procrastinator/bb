@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { ownerActionsInputSchema, ownerAnswerRequestSchema, type OwnerActionsResult, type OwnerAnswerRequest, type OwnerAnswerResult } from "./owner-actions-contract.js";
 import { qualityProfileInputSchema, qualityReferenceSelectionSchema, type QualityProfileResult, type QualityReferenceResult } from "./contract.js";
 import { lookupInputSchema, missionInputSchema, personalOsContract, personalOsHostContract, submissionResultSchema, submitInputSchema, listInputsInputSchema, getInputInputSchema, inputArtifactInputSchema, taskChatInputSchema, openTaskChatInputSchema, desktopOpenResultSchema, taskResultInputSchema, type MissionResult, type MissionsResult, type TasksResult, type SubmitInput, type SubmissionResult, type SubmissionLookupResult, type InputsResult, type InputDetailResult, type InputArtifactResult, type TaskChatResult, type OpenTaskChatResult, type TaskActivityResult, type MissionActivityResult, type TaskResult } from "./contract.js";
 
-const HELP = "bb personal-os missions\nbb personal-os mission <mission_id>\nbb personal-os tasks <mission_id>\nbb personal-os task-activity <task_id>\nbb personal-os mission-activity <mission_id>\nbb personal-os task-result <task_id> <task_execution_binding_id>\nbb personal-os quality-profile <mission_id> <profile_id> <version> <profile_hash>\nbb personal-os quality-reference <mission_id> <profile_id> <version> <profile_hash> <dimension_id> <example|counterexample> <sample_id>\nbb personal-os inputs [mission_id]\nbb personal-os input <note_id>\nbb personal-os input-artifact <note_id> <input_result_id>\nbb personal-os task-chat <task_id>\nbb personal-os open-task-chat <task_id> <expected-link-version>\nbb personal-os submit <request-uuid> <quoted-text>\nbb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>\nbb personal-os submission <request-uuid>\nJSON reads, bounded owner input and explicit linked-chat navigation. Repeat unknown save outcomes with the exact request UUID, text and target. Configure the enrolled host ID with bb plugin config personal-os.";
+const HELP = "bb personal-os missions\nbb personal-os owner-actions <mission_id>\nbb personal-os answer-owner-action <request-json>\nbb personal-os mission <mission_id>\nbb personal-os tasks <mission_id>\nbb personal-os task-activity <task_id>\nbb personal-os mission-activity <mission_id>\nbb personal-os task-result <task_id> <task_execution_binding_id>\nbb personal-os quality-profile <mission_id> <profile_id> <version> <profile_hash>\nbb personal-os quality-reference <mission_id> <profile_id> <version> <profile_hash> <dimension_id> <example|counterexample> <sample_id>\nbb personal-os inputs [mission_id]\nbb personal-os input <note_id>\nbb personal-os input-artifact <note_id> <input_result_id>\nbb personal-os task-chat <task_id>\nbb personal-os open-task-chat <task_id> <expected-link-version>\nbb personal-os submit <request-uuid> <quoted-text>\nbb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>\nbb personal-os submit-task <request-uuid> <mission_id> <expected-mission-version> <task_id> <expected-task-version> <context_hash> <quoted-text>\nbb personal-os submission <request-uuid>\nJSON reads, bounded owner input and explicit linked-chat navigation. Repeat unknown save outcomes with the exact request UUID, text and target. Configure the enrolled host ID with bb plugin config personal-os.";
 
 const commandRowSchema = z.object({
   request_id: lookupInputSchema.shape.requestId,
@@ -72,9 +73,15 @@ export default function plugin(bb: BbPluginApi) {
     const result = row.result_json === null ? null : submissionResultSchema.parse(JSON.parse(row.result_json));
     if (result && result.requestId !== requestId) throw new Error("storage_unavailable");
     if ((row.host_id === null) !== (result?.state === "not_sent")) throw new Error("storage_unavailable");
-    if (result?.state === "saved" && (input.target.scope === "personal"
-      ? result.missionId !== null || result.missionVersion !== null
-      : result.missionId !== input.target.missionId || result.missionVersion !== input.target.expectedMissionVersion + 1)) throw new Error("storage_unavailable");
+    if (result?.state === "saved") {
+      const target = input.target;
+      const missionMismatch = target.scope === "personal" ? result.missionId !== null || result.missionVersion !== null
+        : result.missionId !== target.missionId || result.missionVersion !== target.expectedMissionVersion + 1;
+      const taskMismatch = target.scope === "task" ? result.taskBinding === undefined || result.taskBinding.taskId !== target.taskId
+        || result.taskBinding.taskVersion !== target.expectedTaskVersion || result.taskBinding.contextHash !== target.contextHash
+        : result.taskBinding !== undefined;
+      if (missionMismatch || taskMismatch) throw new Error("storage_unavailable");
+    }
     return { ...row, input, result };
   }
 
@@ -197,7 +204,38 @@ export default function plugin(bb: BbPluginApi) {
     }
   }
 
+  async function getOwnerActions(input: z.infer<typeof ownerActionsInputSchema>): Promise<OwnerActionsResult> {
+    const unavailable = (reason: "host_not_configured" | "host_unavailable"): OwnerActionsResult => ({ state: "unavailable", observedAt: new Date().toISOString(), reason });
+    try {
+      const current = await settings.get();
+      if (!current.hostId) return unavailable("host_not_configured");
+      const hostId = current.hostId;
+      const result = await host.call("getOwnerActions", input, { hostId, timeoutMs: 10000 });
+      return result.state === "available" ? { ...result, host_binding: requestHash(hostId) } : result;
+    } catch {
+      return unavailable("host_unavailable");
+    }
+  }
+
+  async function answerOwnerAction(input: OwnerAnswerRequest): Promise<OwnerAnswerResult> {
+    const unknown = (): OwnerAnswerResult => ({ state: "outcome_unknown", request_id: input.request_id,
+      mission_id: input.selection.mission_id, decision_id: input.selection.decision_id });
+    try {
+      const current = await settings.get();
+      if (!current.hostId || requestHash(current.hostId) !== input.host_binding) return unknown();
+      const hostId = current.hostId;
+      const result = await host.call("answerOwnerAction", input, { hostId, timeoutMs: 10000 });
+      if (result.request_id !== input.request_id || result.mission_id !== input.selection.mission_id || result.decision_id !== input.selection.decision_id
+        || result.state === "saved" && result.decision_version !== input.selection.decision_version + 1) return unknown();
+      return result;
+    } catch {
+      return unknown();
+    }
+  }
+
   const handlers: PluginRpcHandlers<typeof personalOsContract> = {
+    getOwnerActions,
+    answerOwnerAction,
     listMissions: () => hostCall(hostId => host.call("listMissions", null, { hostId, timeoutMs: 10000 })),
     getMission: input => hostCall(hostId => host.call("getMission", input, { hostId, timeoutMs: 10000 })),
     listTasks: input => hostCall(hostId => host.call("listTasks", input, { hostId, timeoutMs: 10000 })),
@@ -219,6 +257,8 @@ export default function plugin(bb: BbPluginApi) {
     name: "personal-os",
     summary: "Read goals and save bounded Personal OS owner input through its enrolled host",
     commands: [
+      { name: "owner-actions", summary: "Read bounded local owner questions and pin the configured host", usage: "bb personal-os owner-actions <mission_id>" },
+      { name: "answer-owner-action", summary: "Save an exact pinned local answer with a stable request UUID", usage: "bb personal-os answer-owner-action <request-json>" },
       { name: "missions", summary: "List goals", usage: "bb personal-os missions" },
       { name: "mission", summary: "Read one goal", usage: "bb personal-os mission <mission_id>" },
       { name: "tasks", summary: "Read goal tasks", usage: "bb personal-os tasks <mission_id>" },
@@ -234,12 +274,23 @@ export default function plugin(bb: BbPluginApi) {
       { name: "open-task-chat", summary: "Explicitly request opening the current bound chat on its Mac", usage: "bb personal-os open-task-chat <task_id> <expected-link-version>" },
       { name: "submit", summary: "Save a personal instruction with a stable request UUID", usage: "bb personal-os submit <request-uuid> <quoted-text>" },
       { name: "submit-mission", summary: "Save an instruction pinned to a goal version", usage: "bb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>" },
+      { name: "submit-task", summary: "Save an instruction pinned to an exact task version and context", usage: "bb personal-os submit-task <request-uuid> <mission_id> <expected-mission-version> <task_id> <expected-task-version> <context_hash> <quoted-text>" },
       { name: "submission", summary: "Read a saved command outcome without network or dispatch", usage: "bb personal-os submission <request-uuid>" },
     ],
     async run(argv) {
       if (argv.length === 0 || (argv.length === 1 && ["help", "--help", "-h"].includes(argv[0]))) return { exitCode: 0, stdout: HELP };
-      let result: MissionsResult | MissionResult | TasksResult | SubmissionLookupResult | InputsResult | InputDetailResult | InputArtifactResult | TaskChatResult | OpenTaskChatResult | TaskActivityResult | MissionActivityResult | TaskResult | QualityProfileResult | QualityReferenceResult;
-      if (argv[0] === "missions" && argv.length === 1) {
+      let result: OwnerActionsResult | OwnerAnswerResult | MissionsResult | MissionResult | TasksResult | SubmissionLookupResult | InputsResult | InputDetailResult | InputArtifactResult | TaskChatResult | OpenTaskChatResult | TaskActivityResult | MissionActivityResult | TaskResult | QualityProfileResult | QualityReferenceResult;
+      if (argv[0] === "owner-actions" && argv.length === 2) {
+        const input = ownerActionsInputSchema.safeParse({ mission_id: argv[1] });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid mission ID.\n" + HELP };
+        result = await getOwnerActions(input.data);
+      } else if (argv[0] === "answer-owner-action" && argv.length === 2) {
+        let raw: unknown;
+        try { raw = JSON.parse(argv[1]); } catch { return { exitCode: 1, stderr: "Invalid answer JSON.\n" + HELP }; }
+        const input = ownerAnswerRequestSchema.safeParse(raw);
+        if (!input.success) return { exitCode: 1, stderr: "Invalid exact owner answer.\n" + HELP };
+        result = await answerOwnerAction(input.data);
+      } else if (argv[0] === "missions" && argv.length === 1) {
         result = await handlers.listMissions(null);
       } else if ((argv[0] === "mission" || argv[0] === "tasks") && argv.length === 2) {
         const input = missionInputSchema.safeParse({ missionId: argv[1] });
@@ -295,6 +346,12 @@ export default function plugin(bb: BbPluginApi) {
           ? { requestId: argv[1], text: argv[2], target: { scope: "personal" } }
           : { requestId: argv[1], text: argv[4], target: { scope: "mission", missionId: argv[2], expectedMissionVersion: /^[1-9][0-9]*$/.test(argv[3]) ? Number(argv[3]) : null } });
         if (!input.success) return { exitCode: 1, stderr: "Invalid instruction, UUID or pinned goal version.\n" + HELP };
+        result = await submitInput(input.data);
+      } else if (argv[0] === "submit-task" && argv.length === 8) {
+        const input = submitInputSchema.safeParse({ requestId: argv[1], text: argv[7], target: { scope: "task", missionId: argv[2],
+          expectedMissionVersion: /^[1-9][0-9]*$/.test(argv[3]) ? Number(argv[3]) : null, taskId: argv[4],
+          expectedTaskVersion: /^[1-9][0-9]*$/.test(argv[5]) ? Number(argv[5]) : null, contextHash: argv[6] } });
+        if (!input.success) return { exitCode: 1, stderr: "Invalid instruction or exact task binding.\n" + HELP };
         result = await submitInput(input.data);
       } else {
         return { exitCode: 1, stderr: "Unknown command or arguments.\n" + HELP };

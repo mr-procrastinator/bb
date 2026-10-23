@@ -36,6 +36,8 @@ Read and save operations are also available through typed plugin RPC and CLI:
 
 ```sh
 bb personal-os missions
+bb personal-os owner-actions <mission_id>
+bb personal-os answer-owner-action '<request-json>'
 bb personal-os mission mission_0123456789abcdef0123456789abcdef
 bb personal-os tasks mission_0123456789abcdef0123456789abcdef
 bb personal-os task-activity task_0123456789abcdef0123456789abcdef
@@ -49,13 +51,15 @@ bb personal-os task-chat task_0123456789abcdef0123456789abcdef
 bb personal-os open-task-chat task_0123456789abcdef0123456789abcdef 1
 bb personal-os submit 01234567-89ab-4def-8123-456789abcdef "Collect my next three priorities"
 bb personal-os submit-mission 11234567-89ab-4def-8123-456789abcdef mission_0123456789abcdef0123456789abcdef 12 "Clarify the next step"
+bb personal-os submit-task <request-uuid> <mission_id> <expected-mission-version> <task_id> <expected-task-version> <context_hash> "Clarify this task"
 bb personal-os submission 01234567-89ab-4def-8123-456789abcdef
 ```
 
 CLI responses are JSON. Exit code 0 means a successful read or confirmed saved
-input; 1 means known rejection, no configured host before preparation, or no ledger
+input/answer; 1 means known rejection, no configured host before input preparation, or no ledger
 entry; 2 means an unavailable, blocked or uncertain outcome. Unknown states are
-not converted into empty successful lists. Refresh is manual.
+not converted into empty successful lists. There is no polling; explicit reads and
+confirmed saves refresh their own views.
 Read time records when the plugin read the API, not when an agent last worked.
 
 Task state `doing` is not proof of a running process. Historical `done` tasks do
@@ -175,6 +179,10 @@ sources, changed bytes or unavailable files keep the content hidden. No latest
 profile or other sample substitutes for the selected one. Previewing bytes does
 not confirm the sample, calibrate a reviewer or adopt the profile; historical and
 unknown currentness remain explicit. Private source locators are not returned.
+**Во весь размер** expands the same verified image inline, without refetching it or
+opening a modal. **100%** retains its pixel size with scrolling; **По ширине** fits the
+page. **Свернуть** or Escape restores the compact preview. This is a viewing mode,
+not a second file or another integrity/acceptance result.
 
 These are source-level read capabilities. Deployment, build and manual UI results
 must be recorded separately; this section does not establish a live pass.
@@ -187,7 +195,10 @@ inbox items are not silently assigned to the active goal. Total count and
 `truncated` describe omitted records. `getInput` returns the original text, current
 saved note state, original validated triage plan and attached partial results.
 The plan records proposed work, not execution. Its goal-version flag compares an
-audit version, not semantic product acceptance.
+audit version, not semantic product acceptance. Optional `task_input` keeps the exact
+recorded task/version/context and currentness; absent metadata remains unknown.
+`plan_tasks` links a saved plan action by its exact run and ordinal to the task that
+was published. Titles do not create or infer those links.
 
 `getInputArtifact` accepts only the note and attached result IDs. The host first
 reads that exact attachment's descriptor, then fetches its owner route. It checks
@@ -220,8 +231,8 @@ No new chat, message, provider resume or model execution is added.
 ## Owner input and recovery
 
 `submitInput` accepts a UUID, plain text up to 20,000 UTF-16 code units, and one
-explicit target: personal inbox, or a goal ID with the exact version read by the
-user. Personal is the default UI scope. The plugin does not silently adopt a
+explicit target: personal inbox, a goal/version, or an existing task with its goal
+version, task version and semantic context hash read by the user. Personal is the default UI scope. The plugin does not silently adopt a
 newer goal version. Optional `inputKind` is `text` or `voice`; omitted values retain
 the existing `text` behavior. A dictation draft explicitly selects `voice`. This is
 an input-origin label, not an audio upload or an execution request.
@@ -229,7 +240,7 @@ an input-origin label, not an audio upload or an execution request.
 Before contacting a host, the server transactionally stores the exact command,
 its hash and selected host in its plugin SQLite command ledger. This ledger is
 transport bookkeeping, not a second task owner or dispatch queue. A retry cannot
-change the UUID, text, input kind, scope, goal version or host. A changed host setting blocks
+change the UUID, text, input kind, scope, task/goal versions, context hash or host. A changed host setting blocks
 an unresolved command. Confirmed saved receipts replay locally without network.
 If no host is configured, a terminal `not_sent` ledger entry prevents an older
 concurrent call from later sending that UUID. After configuring a host, a new
@@ -237,8 +248,10 @@ explicit submission uses a new UUID. A null host exists only in that terminal
 entry; an unresolved command always retains its original selected host.
 
 Personal input uses POST `/api/inbox` with `project_id:null`. Goal input uses
-POST `/api/missions/<mission_id>/input` with the pinned version. Both use the same
-stable `bb-personal-os:<UUID>` idempotency key on every retry. Personal OS owns
+POST `/api/missions/<mission_id>/input` with the pinned version. Task input uses
+POST `/api/tasks/<task_id>/input` with the exact mission ID/version, task version
+and context hash. All three use the same stable `bb-personal-os:<UUID>` idempotency
+key on every retry. Personal OS owns
 deduplication and the atomic note/goal link. A receipt's `new` state describes its
 original creation, not the current status of the note or completion of its work.
 
@@ -251,6 +264,14 @@ retry sends the exact stored command and receives the owner's original receipt
 if the first request was already saved. Never generate a new UUID to resolve an
 unknown outcome.
 
+**Дополнить задачу** opens the existing composer from a current task. An empty
+draft can select that task; existing text requires an explicit **К этой задаче**
+choice. Pending input cannot be rebound. Saving appends a note and immutable task
+binding, increments the mission audit version, and leaves task version/state
+unchanged. Triage can use the pinned task snapshot; it does not publish a duplicate
+task or start execution. A saved response is accepted only with the matching
+`taskBinding`; stale versions or context require a fresh explicit selection.
+
 The UI stores its draft and exact pending request in this browser's local storage.
 It does not automatically submit after reload. A pending request locks text and
 target until the outcome is established. Drafts are local to this browser, not a
@@ -262,6 +283,27 @@ checks across tabs. If another tab changes the shared draft, this tab preserves
 its unsent text separately in session storage. Restoration is offered only when
 the shared composer is empty and has no pending request. That backup survives a
 reload, but not closing the tab.
+
+## Local owner questions and answers
+
+`getOwnerActions` / `owner-actions` read bounded local questions for one exact goal;
+legacy unbound questions remain read-only history. The board can show an option
+choice or comment form. `answerOwnerAction` / `answer-owner-action` accept JSON with
+`request_id` (stable UUID), the read envelope's `host_binding`, exact `selection`
+(`mission_id`, `mission_version`, `decision_id`, `decision_version`, `context_hash`),
+and `response` (`option_id`, `comment`). The UI saves this full request before POST.
+
+The binding is a SHA-256 of the configured host ID, used only as a constraint.
+Changed or absent host settings leave the outcome unknown and do not retarget the
+answer. Retry sends the same POST to `/api/decision-answers` with the same UUID and
+payload, even if a fresh read shows the question resolved or omits it. Pending
+recovery stays separate from the bounded question list. No new question is created.
+
+Only an exact 200 receipt with matching mission/decision, both incremented versions,
+resolved status and local-only/no-external-action flags confirms saving. Known typed
+version/context/request conflicts can reject; transport, non-JSON and 5xx outcomes
+stay unknown. No automatic retry follows reload. An answer records a local choice;
+it is not a grant, task execution, native answer delivery or quality acceptance.
 
 ## Voice drafting
 
@@ -289,13 +331,16 @@ Task activity uses only `/api/task-execution?task_id=<task_id>` or the fixed
 mission batch query, and `/api/task-execution/<binding_id>/artifact?task_id=<task_id>`.
 Exact profiles use `/api/quality/profile-versions/<profile_id>?version=<version>&hash=<sha256>`
 with a 128 KiB reply limit. Exact sample reads use only `/api/quality/reference`
-with the seven validated selection fields and a 3 MiB reply limit.
+with the seven validated selection fields and a 3 MiB reply limit. Local questions
+use only `/api/owner-actions?mission_id=<mission_id>` with a 256 KiB reply limit.
 Responses are limited to 2 MiB for goals/tasks, 1 MiB for inbox lists, 512 KiB for
 instruction details and exact artifact bytes, 1 MiB for task activity and 64 KiB for chat bindings;
 100 goals and 500 tasks; requests time out after five seconds. IDs and responses
-are validated at the host boundary. Redirects are rejected. Raw responses,
-credentials, source payloads and arbitrary URLs are not sent to the frontend.
-POST uses only the two owner-input endpoints above, with a 16 KiB reply limit.
+are validated at the host boundary. Redirects are rejected. Unprojected owner
+responses, credentials, workflow source payloads and arbitrary URLs are excluded;
+only explicit verified sample content and structured result fields reach the frontend.
+POST uses only the three owner-input endpoints and local decision-answer endpoint
+above, with a 16 KiB reply limit.
 The host adds the local client header; no credential is copied into the browser.
 
 `/api/control` is deliberately excluded because it records skill observations.
@@ -303,8 +348,12 @@ The plugin has no task/status write, dispatch, model or chat-creation action.
 Skill-package bytes, manifests, problem links and reported evaluations remain owned
 by Personal OS. This plugin does not refresh that catalog, capture packages or
 promote a skill; it does not keep a second skill library.
-Decision answers remain outside this slice. It delegates explicit Desktop
-navigation to the existing opener rather than adding a second opener. The command ledger is initialized during plugin loading. Outcome reads
+Local answers use the existing Personal OS decision owner; they add no execution
+permissions. Answer drafts and pending requests use a shared Web Lock per storage key
+and compare the previous bytes before every write. Browsers without Web Locks keep
+the data and disable submission. An unknown pending request retains its original host
+binding and remains available even when the question has moved into history.
+The plugin delegates explicit Desktop navigation to the existing opener rather than adding a second opener. The command ledger is initialized during plugin loading. Outcome reads
 do not initialize storage. There is no background poller or automatic resend.
 
 ## Development

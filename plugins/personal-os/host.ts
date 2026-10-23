@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
-import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, sourceQualityProfileResponseSchema, qualityReferenceAssetSchema, type QualityReferenceSelection, type QualityReferenceResult, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
+import { ownerActionsSchema, type OwnerAnswerRequest, type OwnerAnswerResult } from "./owner-actions-contract.js";
+import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, sourceQualityProfileResponseSchema, qualityReferenceAssetSchema, type QualityReferenceSelection, type QualityReferenceResult, type InputItem, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
 
 const BASE_URL = "http://127.0.0.1:7317";
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -77,8 +78,16 @@ async function read<S extends z.ZodType>(path: string, schema: S, signal: AbortS
   }
 }
 
+function inputLinksMatch(item: InputItem) {
+  const binding = item.task_input?.binding;
+  const plan = item.plan_tasks;
+  return (plan?.state !== "available" || plan.run_id !== null && plan.run_id === item.triage.run_id)
+    && (!binding || binding.note_id === item.id && binding.mission_id === item.mission_id)
+    && (item.plan_tasks?.items ?? []).every(link => link.mission_id === item.mission_id);
+}
+
 async function readInput(noteId: string, signal: AbortSignal) {
-  return read("/api/inbox/" + encodeURIComponent(noteId), sourceInputDetailResponseSchema.refine(value => value.item.id === noteId && value.item.results.items.every(result => result.note_id === noteId)), signal, 512 * 1024);
+  return read("/api/inbox/" + encodeURIComponent(noteId), sourceInputDetailResponseSchema.refine(value => value.item.id === noteId && inputLinksMatch(value.item) && value.item.results.items.every(result => result.note_id === noteId)), signal, 512 * 1024);
 }
 
 function referenceImageType(bytes: Uint8Array): "image/png" | "image/jpeg" | null {
@@ -218,10 +227,15 @@ async function submit(input: SubmitInput, signal: AbortSignal): Promise<Submissi
   let responseReceived = false;
   try {
     const target = input.target;
-    const path = target.scope === "personal" ? "/api/inbox" : "/api/missions/" + encodeURIComponent(target.missionId) + "/input";
+    const path = target.scope === "personal" ? "/api/inbox" : target.scope === "task"
+      ? "/api/tasks/" + encodeURIComponent(target.taskId) + "/input" : "/api/missions/" + encodeURIComponent(target.missionId) + "/input";
     const payload = target.scope === "personal"
       ? { project_id: null, text: input.text, input_kind: input.inputKind ?? "text" }
-      : { text: input.text, input_kind: input.inputKind ?? "text", expected_version: target.expectedMissionVersion };
+      : target.scope === "task"
+        ? { mission_id: target.missionId, expected_mission_version: target.expectedMissionVersion,
+          expected_task_version: target.expectedTaskVersion, expected_context_hash: target.contextHash,
+          text: input.text, input_kind: input.inputKind ?? "text" }
+        : { text: input.text, input_kind: input.inputKind ?? "text", expected_version: target.expectedMissionVersion };
     const response = await fetch(BASE_URL + path, {
       method: "POST",
       redirect: "error",
@@ -236,13 +250,25 @@ async function submit(input: SubmitInput, signal: AbortSignal): Promise<Submissi
         const receipt = z.object({ id: z.string().regex(/^note_[a-f0-9]{32}$/), version: z.literal(1), state: z.literal("new"), created_at: z.string().datetime({ offset: true }) }).parse(raw);
         return { ...identity(), state: "saved", noteId: receipt.id, noteVersion: receipt.version, receiptState: receipt.state, missionId: null, missionVersion: null };
       }
+      if (target.scope === "task") {
+        const receipt = z.object({ mission_id: z.literal(target.missionId), version: z.literal(target.expectedMissionVersion + 1),
+          note_id: z.string().regex(/^note_[a-f0-9]{32}$/), note_version: z.literal(1), state: z.literal("new"),
+          task_id: z.literal(target.taskId), task_version: z.literal(target.expectedTaskVersion), context_hash: z.literal(target.contextHash),
+          binding_id: z.string().regex(/^task_input_[a-f0-9]{32}$/), binding_hash: z.string().regex(/^[a-f0-9]{64}$/),
+          execution_performed: z.literal(false), task_mutation_performed: z.literal(false) }).parse(raw);
+        return { ...identity(), state: "saved", noteId: receipt.note_id, noteVersion: receipt.note_version, receiptState: receipt.state,
+          missionId: receipt.mission_id, missionVersion: receipt.version, taskBinding: { id: receipt.binding_id, hash: receipt.binding_hash,
+            taskId: receipt.task_id, taskVersion: receipt.task_version, contextHash: receipt.context_hash } };
+      }
       const receipt = z.object({ mission_id: z.literal(target.missionId), version: z.literal(target.expectedMissionVersion + 1), note_id: z.string().regex(/^note_[a-f0-9]{32}$/), note_version: z.literal(1), state: z.literal("new") }).parse(raw);
       return { ...identity(), state: "saved", noteId: receipt.note_id, noteVersion: receipt.note_version, receiptState: receipt.state, missionId: receipt.mission_id, missionVersion: receipt.version };
     }
     if (response.status >= 400 && response.status < 500) {
       const error = z.object({ code: z.string().max(100) }).safeParse(raw);
-      if (error.success && ["version_conflict", "idempotency_conflict", "mission_not_registered", "invalid_transition"].includes(error.data.code)) {
-        const reason = error.data.code === "version_conflict" ? "version_conflict" : error.data.code === "idempotency_conflict" ? "idempotency_conflict" : "source_rejected";
+      if (error.success && (["version_conflict", "idempotency_conflict", "mission_not_registered", "invalid_transition"].includes(error.data.code)
+        || target.scope === "task" && ["invalid_task_input", "invalid_task_input_id", "invalid_context_hash", "invalid_version", "invalid_input_kind", "not_found", "task_mission_mismatch", "mission_context_changed", "note_already_linked", "task_inputs_unavailable", "task_input_too_large"].includes(error.data.code))) {
+        const reason = error.data.code === "version_conflict" ? "version_conflict" : error.data.code === "idempotency_conflict" ? "idempotency_conflict"
+          : error.data.code === "mission_context_changed" ? "context_changed" : ["task_mission_mismatch", "not_found"].includes(error.data.code) ? "task_changed" : "source_rejected";
         return { ...identity(), state: "rejected", reason };
       }
     }
@@ -255,9 +281,57 @@ async function submit(input: SubmitInput, signal: AbortSignal): Promise<Submissi
   }
 }
 
+async function answerOwnerAction(input: OwnerAnswerRequest, signal: AbortSignal): Promise<OwnerAnswerResult> {
+  const selection = input.selection;
+  const identity = { request_id: input.request_id, mission_id: selection.mission_id, decision_id: selection.decision_id };
+  const unknown = (): OwnerAnswerResult => ({ ...identity, state: "outcome_unknown" });
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) controller.abort();
+  const timer = setTimeout(abort, TIMEOUT_MS);
+  try {
+    const payload = { decision_id: selection.decision_id, expected_mission_version: selection.mission_version,
+      expected_decision_version: selection.decision_version, expected_context_hash: selection.context_hash,
+      expected_mission_id: selection.mission_id, option_id: input.response.option_id, comment: input.response.comment,
+      source_ref: { kind: "owner_input", locator: "bb-owner-answer:" + input.request_id } };
+    const response = await fetch(BASE_URL + "/api/decision-answers", {
+      method: "POST", redirect: "error", signal: controller.signal,
+      headers: { Accept: "application/json", "Content-Type": "application/json", "X-Personal-OS": "1", "Idempotency-Key": input.request_id },
+      body: JSON.stringify(payload),
+    });
+    const raw = await responseJson(response, 16384);
+    if (response.status === 200) {
+      const receipt = z.object({ mission_id: z.literal(selection.mission_id), version: z.literal(selection.mission_version + 1),
+        decision_id: z.literal(selection.decision_id), decision_version: z.literal(selection.decision_version + 1),
+        status: z.literal("resolved"), local_only: z.literal(true), action_execution: z.literal("not_started"), external_action_performed: z.literal(false) }).parse(raw);
+      return { ...identity, state: "saved", decision_version: receipt.decision_version };
+    }
+    if (response.status >= 400 && response.status < 500) {
+      const error = z.object({ code: z.string().max(100) }).safeParse(raw);
+      if (error.success) {
+        if (["version_conflict", "decision_version_conflict"].includes(error.data.code)) return { ...identity, state: "rejected", reason: "version_conflict" };
+        if (error.data.code === "decision_context_changed") return { ...identity, state: "rejected", reason: "context_changed" };
+        if (error.data.code === "decision_already_resolved") return { ...identity, state: "rejected", reason: "already_resolved" };
+        if (["idempotency_conflict", "decision_mission_mismatch"].includes(error.data.code)) return { ...identity, state: "rejected", reason: "request_mismatch" };
+      }
+    }
+    return unknown();
+  } catch {
+    return unknown();
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", abort);
+  }
+}
+
 export default experimental_defineHostEntry({
   contract: personalOsHostContract,
   handlers: {
+    getOwnerActions(input, context) {
+      return read("/api/owner-actions?mission_id=" + encodeURIComponent(input.mission_id), ownerActionsSchema.refine(value => value.mission_id === input.mission_id), context.signal, 256 * 1024);
+    },
+    answerOwnerAction(input, context) { return answerOwnerAction(input, context.signal); },
     listMissions(_input, context) {
       return read("/api/missions", z.object({ missions: z.array(missionSchema).max(100) }), context.signal);
     },
@@ -270,7 +344,7 @@ export default experimental_defineHostEntry({
     listInputs(input, context) {
       const missionId = input.scope === "mission" ? input.missionId : null;
       const path = "/api/inbox?scope=" + input.scope + (missionId ? "&mission_id=" + encodeURIComponent(missionId) : "") + "&limit=20";
-      return read(path, sourceInputListSchema.refine(value => value.scope === input.scope && value.mission_id === missionId && value.items.every(item => item.mission_id === missionId && (input.scope !== "personal" || (item.project_id === null && item.mission_link_state === "unlinked")) && item.results.items.every(result => result.note_id === item.id))), context.signal, 1024 * 1024);
+      return read(path, sourceInputListSchema.refine(value => value.items.every(inputLinksMatch) && value.scope === input.scope && value.mission_id === missionId && value.items.every(item => item.mission_id === missionId && (input.scope !== "personal" || (item.project_id === null && item.mission_link_state === "unlinked")) && item.results.items.every(result => result.note_id === item.id))), context.signal, 1024 * 1024);
     },
     getInput(input, context) { return readInput(input.noteId, context.signal); },
     getInputArtifact(input, context) { return readInputArtifact(input.noteId, input.resultId, context.signal); },

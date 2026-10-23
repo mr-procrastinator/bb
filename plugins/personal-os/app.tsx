@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { z } from "zod";
 import { VoiceInput } from "./VoiceInput.js";
 import { QualityReferenceViewer, type QualityReferenceSelection } from "./QualityReferenceViewer.js";
+import { OwnerActions } from "./OwnerActions.js";
 import { qualityProfileInputSchema, submitInputSchema, type CandidateReadiness, type DomainDeliveryRead, type InputArtifactResult, type InputDetail, type InputDetailResult, type InputItem, type InputsResult, type Mission, type MissionActivityResult, type MissionResult, type MissionsResult, type OpenTaskChatResult, type PartialResult, type PersonalOsContract, type QualityProfileResult, type SubmitInput, type SubmissionLookupResult, type Task, type TaskActivityItem, type TaskActivityResult, type TaskChatResult, type TaskExecutionBinding, type TaskResult, type TasksResult } from "./contract.js";
 
 const PANEL_PATH = "personal-os";
@@ -33,6 +34,8 @@ const inputDraftSchema = z.object({
   pending: submitInputSchema.nullable(),
 }).strict().refine(value => value.pending === null || value.pending.text === value.text && JSON.stringify(value.pending.target) === JSON.stringify(value.target) && (value.pending.inputKind === undefined || value.pending.inputKind === value.inputKind));
 type InputDraft = z.infer<typeof inputDraftSchema>;
+type TaskInputChoice = { target: Extract<SubmitInput["target"], { scope: "task" }>; label: string };
+type TaskInputRequest = TaskInputChoice & { sequence: number };
 const emptyInputDraft = (): InputDraft => ({ version: 1, text: "", target: { scope: "personal" }, targetLabel: "", pending: null });
 
 function readInputDraft(storageKey: string): { draft: InputDraft; raw: string | null; error: string; corrupt: boolean } {
@@ -56,7 +59,7 @@ function readInputBackups(storageKey: string): InputDraft[] {
   return parsed.data;
 }
 
-function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId, visible }: { missionId: string | null; onSaved: () => void; onStatus: (label: string) => void; openRequest: number; composerId: string; visible: boolean }) {
+function InputComposer({ missionId, taskRequest, routeKey, refreshNonce, onSaved, onStatus, openRequest, composerId, visible }: { missionId: string | null; taskRequest: TaskInputRequest | null; routeKey: string; refreshNonce: number; onSaved: () => void; onStatus: (label: string) => void; openRequest: number; composerId: string; visible: boolean }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const pluginId = experimental_usePluginId();
@@ -88,6 +91,7 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId, 
   const voiceActiveRef = useRef(false);
   const mounted = useRef(true);
   const composerRef = useRef<HTMLDetailsElement | null>(null);
+  const handledTaskRequest = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     let active = true;
@@ -96,7 +100,7 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId, 
       if (active && result.state === "available" && result.data.id === missionId) setMission(result.data);
     }).catch(() => { if (active) setMission(null); });
     return () => { active = false; };
-  }, [rpc, missionId, missionRevision]);
+  }, [rpc, missionId, missionRevision, refreshNonce]);
   const showDraft = (next: InputDraft) => {
     draftRef.current = next;
     if (mounted.current) setDraft(next);
@@ -176,14 +180,22 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId, 
     void persist({ ...draftRef.current, target, targetLabel });
     setNotice("");
   };
+  useEffect(() => {
+    if (!visible || !taskRequest || handledTaskRequest.current === taskRequest.sequence) return;
+    handledTaskRequest.current = taskRequest.sequence;
+    const current = draftRef.current;
+    if (!current.text && !current.pending && !busyRef.current && !voiceActiveRef.current) chooseTarget(taskRequest.target, taskRequest.label);
+    else setNotice(current.pending ? "Прежняя отправка сохраняет свой адресат. Сначала проверьте её исход." : "Черновик сохранён с прежним адресатом. «К этой задаче» изменит только привязку.");
+  }, [taskRequest, visible]);
   const receive = async (result: SubmissionLookupResult, request: SubmitInput) => {
     if (result.requestId !== request.requestId) {
       setNotice("Ответ не подтвердил прежнюю отправку. Нужна сверка.");
       return;
     }
     if (result.state === "saved") {
-      const matches = request.target.scope === "personal" ? result.missionId === null && result.missionVersion === null : result.missionId === request.target.missionId && result.missionVersion === request.target.expectedMissionVersion + 1;
-      if (!matches) { setNotice("Ответ не подтвердил выбранную цель. Нужна сверка."); return; }
+      const missionMatches = request.target.scope === "personal" ? result.missionId === null && result.missionVersion === null : result.missionId === request.target.missionId && result.missionVersion === request.target.expectedMissionVersion + 1;
+      const taskMatches = request.target.scope === "task" ? result.taskBinding?.taskId === request.target.taskId && result.taskBinding.taskVersion === request.target.expectedTaskVersion && result.taskBinding.contextHash === request.target.contextHash : result.taskBinding === undefined;
+      if (!missionMatches || !taskMatches) { setNotice("Ответ не подтвердил выбранного адресата. Нужна сверка."); return; }
       const cleared = await persist(emptyInputDraft(), request.requestId);
       setSavedNoteId(result.noteId);
       onSaved();
@@ -191,8 +203,9 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId, 
       setMissionRevision(value => value + 1);
     } else if (result.state === "rejected") {
       const cleared = await persist({ ...draftRef.current, pending: null }, request.requestId);
-      setNotice(cleared ? result.reason === "version_conflict" ? "Цель изменилась. Обновите привязку перед отправкой." : "Запрос отклонён. Текст сохранён в черновике." : "Запрос отклонён. Общий черновик изменился или недоступен; он не очищен.");
-      if (result.reason === "version_conflict") setMissionRevision(value => value + 1);
+      const targetChanged = ["version_conflict", "task_changed", "context_changed"].includes(result.reason);
+      setNotice(cleared ? targetChanged ? "Задача или цель изменились. Обновите привязку перед отправкой. Текст сохранён." : "Запрос отклонён. Текст сохранён в черновике." : "Запрос отклонён. Общий черновик изменился или недоступен; он не очищен.");
+      if (targetChanged) setMissionRevision(value => value + 1);
     } else if (result.state === "not_sent") {
       const cleared = await persist({ ...draftRef.current, pending: null }, request.requestId);
       setNotice(cleared ? "Поручение не отправлено. Выберите Mac в настройках плагина." : "Поручение не отправлено. Общий черновик изменился или недоступен; он не очищен.");
@@ -252,19 +265,22 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId, 
   }, [openRequest]);
   const availableMission = mission && mission.id === missionId && !["completed", "cancelled"].includes(mission.state) ? mission : null;
   const selectedMission = draft.target.scope === "mission";
-  const sameMission = draft.target.scope === "mission" && availableMission?.id === draft.target.missionId;
-  const staleTarget = sameMission && draft.target.scope === "mission" && availableMission?.version !== draft.target.expectedMissionVersion;
+  const sameMission = draft.target.scope !== "personal" && availableMission?.id === draft.target.missionId;
+  const staleTarget = sameMission && draft.target.scope !== "personal" && availableMission?.version !== draft.target.expectedMissionVersion;
+  const sameTask = draft.target.scope === "task" && taskRequest !== null && JSON.stringify(draft.target) === JSON.stringify(taskRequest.target);
   return <details ref={composerRef} id={composerId} onToggle={event => setComposerOpen(event.currentTarget.open)} className="mx-auto w-full max-w-5xl rounded-lg border border-border bg-card">
     <summary className="cursor-pointer px-4 py-3 text-sm font-medium">{composerLabel}</summary>
     <form onSubmit={submit} className="space-y-3 border-t border-border p-4" aria-label="Новое поручение">
       <label className="sr-only" htmlFor={fieldId}>Что нужно сделать?</label>
       <Textarea id={fieldId} value={draft.text} maxLength={20000} rows={2} placeholder="Что нужно сделать?" disabled={locked} onChange={event => { void persist({ ...draftRef.current, text: event.target.value }); setNotice(""); }} />
-      <VoiceInput disabled={locked || !!storageError || !visible || !composerOpen} contextKey={(missionId ?? "personal") + ":" + voiceTarget + ":" + voiceGeneration} onFinal={appendVoice} onActiveChange={active => { voiceActiveRef.current = active; if (mounted.current) setVoiceActive(active); }} />
+      <VoiceInput disabled={locked || !!storageError || !visible || !composerOpen} contextKey={routeKey + ":" + voiceTarget + ":" + voiceGeneration} onFinal={appendVoice} onActiveChange={active => { voiceActiveRef.current = active; if (mounted.current) setVoiceActive(active); }} />
       <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2" role="group" aria-label="Куда добавить поручение">
-        <Button type="button" variant={!selectedMission ? "secondary" : "ghost"} size="sm" aria-pressed={!selectedMission} disabled={locked || voiceActive} onClick={() => chooseTarget({ scope: "personal" }, "")}>Личное входящее</Button>
-        <Button type="button" variant={sameMission ? "secondary" : "ghost"} size="sm" aria-pressed={sameMission} disabled={locked || voiceActive || !availableMission} onClick={() => { if (availableMission) chooseTarget({ scope: "mission", missionId: availableMission.id, expectedMissionVersion: availableMission.version }, availableMission.title); }}>{staleTarget ? "Обновить привязку" : "К текущей цели"}</Button>
+        <Button type="button" variant={draft.target.scope === "personal" ? "secondary" : "ghost"} size="sm" aria-pressed={draft.target.scope === "personal"} disabled={locked || voiceActive} onClick={() => chooseTarget({ scope: "personal" }, "")}>Личное входящее</Button>
+        <Button type="button" variant={selectedMission && sameMission ? "secondary" : "ghost"} size="sm" aria-pressed={selectedMission && sameMission} disabled={locked || voiceActive || !availableMission} onClick={() => { if (availableMission) chooseTarget({ scope: "mission", missionId: availableMission.id, expectedMissionVersion: availableMission.version }, availableMission.title); }}>{selectedMission && staleTarget ? "Обновить привязку" : "К текущей цели"}</Button>
+        {taskRequest && <Button type="button" variant={sameTask ? "secondary" : "ghost"} size="sm" aria-pressed={sameTask} disabled={locked || voiceActive || !availableMission || availableMission.version !== taskRequest.target.expectedMissionVersion} onClick={() => chooseTarget(taskRequest.target, taskRequest.label)}>К этой задаче</Button>}
       </div><Button type="submit" size="sm" disabled={busy || voiceActive || initial.corrupt || conflict || !lockAvailable || !draft.pending && (!draft.text.trim() || staleTarget)}>{busy ? "Сохраняем…" : draft.pending ? "Проверить отправку" : "Добавить"}</Button></div>
       {selectedMission && <p className="text-xs text-muted-foreground">К цели: {draft.targetLabel || "ранее выбранная цель"}{staleTarget ? " · условия изменились" : ""}</p>}
+      {draft.target.scope === "task" && <p className="text-xs text-muted-foreground">К задаче: {draft.targetLabel || "ранее выбранная задача"} · версия {draft.target.expectedTaskVersion}{staleTarget ? " · цель изменилась, выберите задачу заново" : ""}</p>}
       {storageError && <p className="text-xs text-destructive-text" role="alert">{storageError}</p>}
       {!lockAvailable && <p className="text-xs text-destructive-text" role="alert">Браузер не поддерживает безопасную запись между вкладками. Добавление поручений недоступно.</p>}
       {backup && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>Отдельных черновиков в этой вкладке: {backups.length}.</span><Button type="button" variant="ghost" size="sm" disabled={locked || voiceActive || !!draft.text} onClick={async () => {
@@ -404,6 +420,15 @@ function InputList({ missionId, refreshRevision, openPersonalRequest }: { missio
   </section>;
 }
 
+function PublishedTaskLink({ note, ordinal, title }: { note: InputDetail; ordinal: number; title: string }) {
+  const navigate = useBbNavigate();
+  const published = note.plan_tasks;
+  if (published?.state !== "available" || note.triage.state !== "available" || !note.triage.run_id || published.run_id !== note.triage.run_id) return null;
+  const matches = published.items.filter(item => item.action_ordinal === ordinal && item.mission_id === note.mission_id && item.title === title);
+  const task = matches.length === 1 ? matches[0] : null;
+  return task ? <div className="flex flex-wrap items-center gap-2 pt-1"><Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + task.mission_id + "/task/" + task.task_id })}>К задаче →</Button>{!task.binding_current && <span className="text-xs text-muted-foreground">{!task.context_current || !task.task_context_current ? "Условия изменились" : !task.version_current ? "Задача изменена после плана" : "Привязка к текущей задаче не подтверждена"}</span>}</div> : null;
+}
+
 function SavedPlan({ note }: { note: InputDetail }) {
   const triage = note.triage;
   const plan = triage.state === "available" ? triage.plan : null;
@@ -411,7 +436,9 @@ function SavedPlan({ note }: { note: InputDetail }) {
   return <section className="space-y-3" aria-label="Сохранённый план"><h2 className="text-base font-semibold">План директора</h2>{stopped && <div className="space-y-1 text-sm" role="status"><p className="font-medium">{stopped}</p><p className="text-muted-foreground">{stoppedTriageReason(note)} {triage.run_state === "failed" ? "Повторный запуск из этого представления недоступен." : "Сохранённый план остаётся в истории."}</p></div>}{plan ? <>
     {triage.note_current !== true && <p className="text-xs text-muted-foreground">{triage.note_current === false ? "План относится к прежнему поручению." : "Связь плана с текущим поручением не подтверждена."}</p>}
     <PlainText text={plan.summary} />
-    {plan.next_actions.length > 0 && <ol className="list-decimal space-y-3 pl-5 text-sm">{plan.next_actions.map((action, index) => <li key={index}><p className="break-words font-medium">{action.title}</p>{action.reason.trim() !== action.title.trim() && <p className="break-words text-muted-foreground">{action.reason}</p>}</li>)}</ol>}
+    {plan.next_actions.length > 0 && <ol className="list-decimal space-y-3 pl-5 text-sm">{plan.next_actions.map((action, index) => <li key={index}><p className="break-words font-medium">{action.title}</p>{action.reason.trim() !== action.title.trim() && <p className="break-words text-muted-foreground">{action.reason}</p>}<PublishedTaskLink note={note} ordinal={index} title={action.title} /></li>)}</ol>}
+    {note.plan_tasks && ["unavailable", "error"].includes(note.plan_tasks.state) && <p className="text-xs text-muted-foreground">Связи плана с опубликованными задачами недоступны.</p>}
+    {note.plan_tasks?.truncated && <p className="text-xs text-muted-foreground">Переходы к задачам показаны не полностью.</p>}
     {plan.required_outcomes.length > 0 && <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Нужный результат · {plan.required_outcomes.length}</summary><ul className="list-disc space-y-2 pl-5 pt-3">{plan.required_outcomes.map((text, index) => <li key={index} className="whitespace-pre-wrap break-words">{text}</li>)}</ul></details>}
     {plan.findings.length > 0 && <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Замечания · {plan.findings.length}</summary><ul className="list-disc space-y-2 pl-5 pt-3">{plan.findings.map((finding, index) => <li key={index} className="whitespace-pre-wrap break-words">{finding.description}</li>)}</ul></details>}
     {plan.questions.length > 0 && <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Вопросы · {plan.questions.length}</summary><ul className="list-disc space-y-2 pl-5 pt-3">{plan.questions.map((text, index) => <li key={index} className="whitespace-pre-wrap break-words">{text}</li>)}</ul></details>}
@@ -433,6 +460,17 @@ function PartialResultBlock({ item, noteId }: { item: PartialResult; noteId: str
   return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><h2 className="text-base font-semibold">Частичный результат</h2>{!current && <p className="text-xs text-muted-foreground">{item.note_current === false || item.candidate_current === false ? "Исторический результат по прежним условиям." : "Связь с текущими условиями не подтверждена."}</p>}<div className="space-y-1"><p className="text-xs text-muted-foreground">Выводы по переданным материалам</p><PlainText text={item.summary} /><p className="text-xs text-muted-foreground">Это выводы исследования, а не текущий статус системы.</p></div><Button type="button" variant="outline" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + noteId + "/result/" + item.id })}>Прочитать полученный файл →</Button>{item.next_action && <div className="space-y-1"><h3 className="text-sm font-medium">Предложенный следующий шаг</h3><PlainText text={item.next_action} /></div>}<p className="text-xs text-muted-foreground">Проверка файла: {fileReviewText(item.review, current)}</p></section>;
 }
 
+function InputTaskLink({ note }: { note: InputDetail }) {
+  const navigate = useBbNavigate();
+  const source = note.task_input;
+  if (!source || source.state === "not_bound") return null;
+  const binding = source.state === "available" && source.binding?.note_id === note.id && source.binding.mission_id === note.mission_id ? source.binding : null;
+  if (!binding) return <p className="text-xs text-muted-foreground">Связь поручения с задачей недоступна.</p>;
+  const current = source.currentness === "current" && source.task_current === true && source.context_current === true && source.note_current === true;
+  const historical = source.currentness === "historical" || source.task_current === false || source.context_current === false || source.note_current === false;
+  return <section className="space-y-2 border-l-2 border-border pl-3" aria-label="Адресат поручения"><p className="text-sm">К задаче: {binding.task_title} · версия {binding.task_version}</p><p className="text-xs text-muted-foreground">{current ? "Привязка соответствует текущим данным." : historical ? "Поручение связано с прежними данными задачи." : "Актуальность привязки не подтверждена."} Запись поручения не меняет задачу и не запускает исполнение.</p><Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + binding.mission_id + "/task/" + binding.task_id })}>Открыть текущую карточку задачи →</Button></section>;
+}
+
 function InputPage({ noteId }: { noteId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
@@ -452,6 +490,7 @@ function InputPage({ noteId }: { noteId: string }) {
   return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex items-center justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "goals" })}>← Мои поручения</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
     {result === null && !failed && <p className="text-sm text-muted-foreground" role="status">Читаем поручение…</p>}{failed || result !== null && !note ? <p className="text-sm text-muted-foreground" role="status">Поручение прочитать не удалось. Его состояние неизвестно.</p> : null}
     {note && <><header className="space-y-2"><p className="text-xs text-muted-foreground">{inputStateLabel(note)}</p><h1 className="text-xl font-semibold tracking-tight">{note.mission_id ? "Поручение цели" : "Личное поручение"}</h1>{note.mission_id && <Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + note.mission_id })}>К задачам цели →</Button>}</header>
+      <InputTaskLink note={note} />
       <section className="space-y-2"><h2 className="text-base font-semibold">Исходное поручение</h2><PlainText text={note.text} /></section>
       {latest ? <details className="rounded-lg border border-border p-4"><summary className="cursor-pointer text-sm text-muted-foreground">{stoppedTriageLabel(note) ?? "Сохранённый план"}</summary><div className="pt-4"><SavedPlan note={note} /></div></details> : <SavedPlan note={note} />}
       {partials === null && <p className="text-sm text-muted-foreground" role="status">Сведения о частичном результате недоступны. Его наличие и актуальность неизвестны.</p>}
@@ -705,6 +744,14 @@ function QualityProfilePage({ selection }: { selection: ProfileSelection }) {
   const [result, setResult] = useState<QualityProfileResult | null>(null);
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [expandedSamples, setExpandedSamples] = useState<Record<string, true>>({});
+  const onSampleExpanded = (key: string, expanded: boolean) => setExpandedSamples(current => {
+    if (!!current[key] === expanded) return current;
+    const next = { ...current };
+    if (expanded) next[key] = true;
+    else delete next[key];
+    return next;
+  });
   const readReference = async (selected: QualityReferenceSelection) => {
     const response = await rpc.call("getQualityReference", selected);
     if (response.state !== "available") throw new Error("reference_unavailable");
@@ -734,7 +781,7 @@ function QualityProfilePage({ selection }: { selection: ProfileSelection }) {
         <div className="space-y-4 pt-4">
           <details className="text-sm"><summary className="cursor-pointer text-muted-foreground"><span>Критерии и состояния · {dimension.criteria.length}</span>{previewCriterion && <span className="mt-1 line-clamp-2 text-foreground">{previewCriterion.description}</span>}{previewState && <span className="mt-1 line-clamp-2 text-xs">Состояние: {previewState.description}</span>}</summary><div className="space-y-3 pt-3">{dimension.criteria.map(criterion => <section key={criterion.id} className="space-y-1"><PlainText text={criterion.description} /><p className="text-xs text-muted-foreground">Нужное основание</p><PlainText text={criterion.evidence_required} /></section>)}{dimension.states.length > 0 && <ul className="list-disc space-y-2 pl-4 text-xs text-muted-foreground">{dimension.states.map(state => <li key={state.id}>{state.description}</li>)}</ul>}</div></details>
           <section className="space-y-1"><h2 className="text-xs font-medium">Почему</h2><PlainText text={dimension.applicability_reason} /></section>
-          <div className="grid gap-4 sm:grid-cols-2"><section className="space-y-2"><h2 className="text-sm font-medium">Описание желаемого образца</h2>{dimension.examples.length ? dimension.examples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><QualityReferenceViewer selection={{ mission_id: profile.mission_id, profile_id: profile.profile_id, version: profile.version, profile_hash: profile.profile_hash, dimension_id: dimension.id, kind: "example", sample_id: example.id }} read={readReference} label="Предложенный желаемый образец" /></div>) : <p className="text-xs text-muted-foreground">Образцов нет в предложении.</p>}</section><section className="space-y-2"><h2 className="text-sm font-medium">Описание контрпримера</h2>{dimension.counterexamples.length ? dimension.counterexamples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><QualityReferenceViewer selection={{ mission_id: profile.mission_id, profile_id: profile.profile_id, version: profile.version, profile_hash: profile.profile_hash, dimension_id: dimension.id, kind: "counterexample", sample_id: example.id }} read={readReference} label="Предложенный контрпример" /></div>) : <p className="text-xs text-muted-foreground">Контрпримеров нет в предложении.</p>}</section></div>
+          <div className={"grid min-w-0 grid-cols-1 gap-4" + (Object.keys(expandedSamples).some(key => key.startsWith(dimension.id + ":")) ? "" : " sm:grid-cols-2")}><section className="min-w-0 space-y-2"><h2 className="text-sm font-medium">Описание желаемого образца</h2>{dimension.examples.length ? dimension.examples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><QualityReferenceViewer selection={{ mission_id: profile.mission_id, profile_id: profile.profile_id, version: profile.version, profile_hash: profile.profile_hash, dimension_id: dimension.id, kind: "example", sample_id: example.id }} read={readReference} onExpandedChange={expanded => onSampleExpanded(dimension.id + ":example:" + example.id, expanded)} label="Предложенный желаемый образец" /></div>) : <p className="text-xs text-muted-foreground">Образцов нет в предложении.</p>}</section><section className="min-w-0 space-y-2"><h2 className="text-sm font-medium">Описание контрпримера</h2>{dimension.counterexamples.length ? dimension.counterexamples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><QualityReferenceViewer selection={{ mission_id: profile.mission_id, profile_id: profile.profile_id, version: profile.version, profile_hash: profile.profile_hash, dimension_id: dimension.id, kind: "counterexample", sample_id: example.id }} read={readReference} onExpandedChange={expanded => onSampleExpanded(dimension.id + ":counterexample:" + example.id, expanded)} label="Предложенный контрпример" /></div>) : <p className="text-xs text-muted-foreground">Контрпримеров нет в предложении.</p>}</section></div>
         </div>
       </details>; })}</div>
       <p className="text-xs text-muted-foreground">Просмотр не согласует образцы, не применяет профиль и не принимает поставку.</p>
@@ -836,9 +883,11 @@ function MissionList({ onCompose, composeLabel, composerId, autoOpen, onInputs, 
   </main>;
 }
 
-function TaskDetail({ task, refreshNonce }: { task: Task; refreshNonce: number }) {
+function TaskDetail({ task, refreshNonce, onCompose, canCompose }: { task: Task; refreshNonce: number; onCompose: () => void; canCompose: boolean }) {
+  const composeHintId = useId();
   return <article className="mx-auto flex w-full max-w-3xl flex-col gap-6 rounded-lg border border-border bg-card p-5 md:p-7">
     <header className="space-y-2"><p className="text-xs text-muted-foreground">{task.state === "done" && task.completion_current !== true ? "Завершена по прежним условиям" : columns.find(column => column.state === task.state)?.title}{task.owner_label ? " · " + task.owner_label : task.state === "doing" ? " · Исполнитель не указан" : ""}</p><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2></header>
+    <div className="space-y-2"><Button type="button" variant="outline" size="sm" disabled={!canCompose} aria-describedby={canCompose ? undefined : composeHintId} onClick={onCompose}>Дополнить задачу</Button>{!canCompose && <p id={composeHintId} className="text-xs text-muted-foreground">Для привязки нужны актуальные данные задачи и цели.</p>}</div>
     {task.context_current !== true && <p className="rounded-md border border-border p-3 text-sm">Актуальность задачи при текущих условиях не подтверждена.</p>}
     <TaskActivity key={"task-activity:" + task.id} task={task} refreshNonce={refreshNonce} />
     {task.expected_result && <section className="space-y-2"><h3 className="text-sm font-medium">Нужный результат</h3><p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{task.expected_result}</p></section>}
@@ -850,7 +899,7 @@ function TaskDetail({ task, refreshNonce }: { task: Task; refreshNonce: number }
   </article>;
 }
 
-function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId, onInputs, inputsId }: { missionId: string; taskId: string | null; onCompose: () => void; composeLabel: string; composerId: string; onInputs: () => void; inputsId: string }) {
+function MissionBoard({ missionId, taskId, refreshNonce, onCompose, onTaskCompose, onOwnerSaved, composeLabel, composerId, onInputs, inputsId }: { missionId: string; taskId: string | null; refreshNonce: number; onCompose: () => void; onTaskCompose: (choice: TaskInputChoice) => void; onOwnerSaved: () => void; composeLabel: string; composerId: string; onInputs: () => void; inputsId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const [mission, setMission] = useState<MissionResult | null>(null);
@@ -861,7 +910,8 @@ function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId, 
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
   const [doneExpanded, setDoneExpanded] = useState(false);
-  const activityKey = missionId + ":" + revision + (taskId ? ":detail" : ":board");
+  const readRevision = revision + refreshNonce;
+  const activityKey = missionId + ":" + revision + ":" + refreshNonce + (taskId ? ":detail" : ":board");
   useEffect(() => {
     let active = true;
     setMission(null);
@@ -871,7 +921,7 @@ function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId, 
       if (active) { setMission(nextMission); setTasks(nextTasks); }
     }).catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
-  }, [rpc, missionId, revision]);
+  }, [rpc, missionId, revision, refreshNonce]);
   useEffect(() => {
     let active = true;
     const generation = ++activityGeneration.current;
@@ -887,6 +937,7 @@ function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId, 
   const activityPending = !taskId && (activityRequest?.key !== activityKey || activityRequest.pending);
   const historicalTasks = board?.items.filter(task => task.state === "done" && task.completion_current !== true) ?? [];
   const selectedTask = taskId && board ? board.items.find(task => task.id === taskId) : null;
+  const taskChoice: TaskInputChoice | null = selectedTask && selectedTask.mission_id === missionId && selectedTask.context_current === true && selectedTask.context_hash && mission?.state === "available" && mission.data.id === missionId && !["completed", "cancelled"].includes(mission.data.state) ? { target: { scope: "task", missionId, expectedMissionVersion: mission.data.version, taskId: selectedTask.id, expectedTaskVersion: selectedTask.version, contextHash: selectedTask.context_hash }, label: selectedTask.title } : null;
   return <main className="flex shrink-0 flex-col gap-4 p-4 md:p-6">
     {taskId ? <>
       <header className="flex flex-wrap items-center justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => go(null)}>← К задачам</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
@@ -897,7 +948,8 @@ function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId, 
     {mission?.state === "unavailable" && <Unavailable result={mission} />}
     {tasks?.state === "unavailable" && <Unavailable result={tasks} />}
     {tasks?.state === "available" && tasks.data.state !== "available" && <p className="rounded-lg border border-border p-5 text-sm text-muted-foreground" role="status">Список задач недоступен. Количество и состояние неизвестны.</p>}
-    {board && taskId && (selectedTask ? <TaskDetail task={selectedTask} refreshNonce={revision} /> : <p className="text-sm text-muted-foreground">Задачи нет в полученном списке.{board.truncated ? " Список неполный." : ""}</p>)}
+    {!taskId && <OwnerActions key={"owner-actions:" + missionId} missionId={missionId} read={input => rpc.call("getOwnerActions", input)} onAnswer={request => rpc.call("answerOwnerAction", request)} refreshNonce={readRevision} onSaved={() => { setRevision(value => value + 1); onOwnerSaved(); }} />}
+    {board && taskId && (selectedTask ? <TaskDetail task={selectedTask} refreshNonce={readRevision} canCompose={taskChoice !== null} onCompose={() => { if (taskChoice) onTaskCompose(taskChoice); }} /> : <p className="text-sm text-muted-foreground">Задачи нет в полученном списке.{board.truncated ? " Список неполный." : ""}</p>)}
     {board && !taskId && <>{activityPending && <p className="text-xs text-muted-foreground" role="status">Читаем этапы исполнения…</p>}<div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-4">{columns.map(column => {
       const items = board.items.filter(task => task.state === column.state && (task.state !== "done" || task.completion_current === true));
       const count = column.state === "done" ? board.current_done_count : board.counts?.[column.state];
@@ -916,8 +968,13 @@ function PersonalOsPanel({ subPath }: { subPath: string }) {
   const [inputRevision, setInputRevision] = useState(0);
   const [composeLabel, setComposeLabel] = useState("+ Поручение");
   const [openRequest, setOpenRequest] = useState(0);
+  const [taskRequest, setTaskRequest] = useState<TaskInputRequest | null>(null);
   const composerId = useId();
   const onCompose = () => setOpenRequest(value => value + 1);
+  const onTaskCompose = (choice: TaskInputChoice) => {
+    setTaskRequest(previous => ({ ...choice, sequence: (previous?.sequence ?? 0) + 1 }));
+    setOpenRequest(value => value + 1);
+  };
   const inputsId = useId();
   const inputsRef = useRef<HTMLDetailsElement | null>(null);
   const handledInputsRequest = useRef(0);
@@ -933,6 +990,8 @@ function PersonalOsPanel({ subPath }: { subPath: string }) {
   const profileSelection = parsedProfile?.success ? parsedProfile.data : null;
   const chooser = subPath === "goals";
   const overview = !subPath || chooser || !!match && !match[2];
+  const taskComposer = !!match?.[2] && !match[3];
+  const visibleTaskRequest = taskComposer && taskRequest?.target.missionId === match?.[1] && taskRequest.target.taskId === match?.[2] ? taskRequest : null;
   useEffect(() => {
     const panel = inputsRef.current;
     if (!overview || !openPersonalRequest || handledInputsRequest.current === openPersonalRequest || !panel) return;
@@ -942,8 +1001,8 @@ function PersonalOsPanel({ subPath }: { subPath: string }) {
     panel.querySelector<HTMLElement>("summary")?.focus();
   }, [overview, openPersonalRequest]);
   return <div className="min-h-0 flex-1 overflow-y-auto">
-    {!subPath || chooser ? <MissionList key={chooser ? "mission-list:chooser" : "mission-list:default"} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} autoOpen={!chooser} onInputs={onInputs} inputsId={inputsId} /> : profileSelection ? <QualityProfilePage key={"quality-profile:" + profileSelection.missionId + ":" + profileSelection.profileId + ":" + profileSelection.version + ":" + profileSelection.profileHash} selection={profileSelection} /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} onInputs={onInputs} inputsId={inputsId} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div key="unsupported-route" className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}
-    <div key="owner-composer" hidden={!overview} className="px-4 pb-4 md:px-6"><InputComposer missionId={match?.[1] ?? null} onSaved={() => setInputRevision(value => value + 1)} onStatus={setComposeLabel} openRequest={openRequest} composerId={composerId} visible={overview} /></div>
+    {!subPath || chooser ? <MissionList key={chooser ? "mission-list:chooser" : "mission-list:default"} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} autoOpen={!chooser} onInputs={onInputs} inputsId={inputsId} /> : profileSelection ? <QualityProfilePage key={"quality-profile:" + profileSelection.missionId + ":" + profileSelection.profileId + ":" + profileSelection.version + ":" + profileSelection.profileHash} selection={profileSelection} /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} refreshNonce={inputRevision} onCompose={onCompose} onTaskCompose={onTaskCompose} onOwnerSaved={() => setInputRevision(value => value + 1)} composeLabel={composeLabel} composerId={composerId} onInputs={onInputs} inputsId={inputsId} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div key="unsupported-route" className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}
+    <div key="owner-composer" hidden={!overview && !taskComposer} className="px-4 pb-4 md:px-6"><InputComposer missionId={match?.[1] ?? null} taskRequest={visibleTaskRequest} routeKey={subPath} refreshNonce={inputRevision} onSaved={() => setInputRevision(value => value + 1)} onStatus={setComposeLabel} openRequest={openRequest} composerId={composerId} visible={overview || taskComposer} /></div>
     {overview && <div key={"recent-inputs:" + (match?.[1] ?? "personal")} className="px-4 pb-6 md:px-6"><details ref={inputsRef} id={inputsId} className="mx-auto w-full max-w-5xl rounded-lg border border-border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">Мои поручения и результаты</summary><InputList key={"input-list:" + (match?.[1] ?? "personal")} missionId={match?.[1] ?? null} refreshRevision={inputRevision} openPersonalRequest={openPersonalRequest} /></details></div>}
   </div>;
 }

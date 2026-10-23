@@ -33,6 +33,7 @@ export type QualityReferenceViewerProps = {
   selection: QualityReferenceSelection;
   read: (selection: QualityReferenceSelection) => Promise<QualityReferenceAsset>;
   label: string;
+  onExpandedChange?: (expanded: boolean) => void;
 };
 
 type Preview = {
@@ -90,15 +91,30 @@ async function verifiedBytes(asset: QualityReferenceAsset, selected: QualityRefe
   return bytes;
 }
 
-export function QualityReferenceViewer({ selection, read, label }: QualityReferenceViewerProps) {
+export function QualityReferenceViewer({ selection, read, label, onExpandedChange }: QualityReferenceViewerProps) {
   const key = selectionKey(selection);
   const regionId = useId();
   const requestId = useRef(0);
   const imageRef = useRef<HTMLImageElement>(null);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const expandedCallback = useRef(onExpandedChange);
+  expandedCallback.current = onExpandedChange;
   const selectedKey = useRef(key);
   selectedKey.current = key;
   const [preview, setPreview] = useState<Preview>({ key, phase: "idle", asset: null, text: null, imageUrl: null, message: "" });
   const visible = preview.key === key ? preview : null;
+  const [imageView, setImageView] = useState<{ key: string; url: string | null; expanded: boolean; scale: "fit" | "actual" }>({ key, url: null, expanded: false, scale: "fit" });
+  const expanded = visible?.phase === "available" && visible.imageUrl !== null && imageView.key === key && imageView.url === visible.imageUrl && imageView.expanded;
+  const actualSize = expanded && imageView.scale === "actual";
+  const imageRegionId = useId();
+
+  useEffect(() => { expandedCallback.current?.(expanded); }, [expanded]);
+  useEffect(() => () => { expandedCallback.current?.(false); }, []);
+
+  function collapseImage() {
+    setImageView(previous => ({ ...previous, expanded: false }));
+    expandButtonRef.current?.focus();
+  }
 
   useEffect(() => {
     requestId.current += 1;
@@ -151,14 +167,31 @@ export function QualityReferenceViewer({ selection, read, label }: QualityRefere
         {(visible.asset.context_current !== true || visible.asset.profile_current !== true) && <p className="text-sm text-muted-foreground">
           {visible.asset.context_current === false || visible.asset.profile_current === false ? "Материал относится к прежнему профилю или условиям." : "Актуальность профиля неизвестна."}
         </p>}
-        {visible.imageUrl && <figure className="overflow-hidden rounded-lg border bg-muted/20">
-          <img ref={imageRef} src={visible.imageUrl} alt={label} className="block h-auto max-h-none w-full object-contain" onError={(event) => {
-            if (imageRef.current !== event.currentTarget || selectedKey.current !== key) return;
-            requestId.current += 1;
-            setPreview({ key, phase: "unavailable", asset: null, text: null, imageUrl: null, message: "Байты проверены, но браузер не смог показать изображение." });
-          }} />
-          <figcaption className="border-t px-3 py-2 text-sm text-muted-foreground">{label}</figcaption>
-        </figure>}
+        {visible.imageUrl && <section className="min-w-0 space-y-2" onKeyDown={event => {
+          if (event.key === "Escape" && expanded) { event.preventDefault(); event.stopPropagation(); collapseImage(); }
+        }}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button ref={expandButtonRef} type="button" variant="outline" size="sm" aria-expanded={expanded} aria-controls={imageRegionId} onClick={() => {
+              if (expanded) collapseImage();
+              else setImageView({ key, url: visible.imageUrl, expanded: true, scale: "actual" });
+            }}>{expanded ? "Свернуть" : "Во весь размер"}</Button>
+            {expanded && <div className="flex flex-wrap gap-1" role="group" aria-label="Масштаб образца">
+              <Button type="button" variant={!actualSize ? "secondary" : "ghost"} size="sm" aria-pressed={!actualSize} onClick={() => setImageView(previous => ({ ...previous, scale: "fit" }))}>По ширине</Button>
+              <Button type="button" variant={actualSize ? "secondary" : "ghost"} size="sm" aria-pressed={actualSize} onClick={() => setImageView(previous => ({ ...previous, scale: "actual" }))}>100%</Button>
+            </div>}
+          </div>
+          {expanded && <p className="text-xs text-muted-foreground">Тот же проверенный файл. В масштабе 100% используйте прокрутку. Escape — свернуть.</p>}
+          <figure className="min-w-0 overflow-hidden rounded-lg border bg-muted/20">
+            <div id={imageRegionId} role={expanded ? "region" : undefined} aria-label={expanded ? label + (actualSize ? ", масштаб 100%, прокрутка изображения" : ", по ширине") : undefined} tabIndex={expanded ? 0 : undefined} className={expanded ? "max-h-[70vh] overflow-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" : undefined}>
+              <img ref={imageRef} src={visible.imageUrl} alt={label} className={actualSize ? "block h-auto max-h-none w-auto max-w-none" : "block h-auto max-h-none w-full object-contain"} onError={(event) => {
+                if (imageRef.current !== event.currentTarget || selectedKey.current !== key) return;
+                requestId.current += 1;
+                setPreview({ key, phase: "unavailable", asset: null, text: null, imageUrl: null, message: "Байты проверены, но браузер не смог показать изображение." });
+              }} />
+            </div>
+            <figcaption className="border-t px-3 py-2 text-sm text-muted-foreground">{label}</figcaption>
+          </figure>
+        </section>}
         {visible.text !== null && <details className="min-w-0 rounded-lg border">
           <summary className="cursor-pointer px-3 py-2 text-sm">Открыть текст материала · {Math.ceil((visible.asset.size ?? 0) / 1024)} КиБ</summary>
           <pre className="whitespace-pre-wrap break-words border-t p-3 font-mono text-xs">{visible.text}</pre>

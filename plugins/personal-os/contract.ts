@@ -1,5 +1,6 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { ownerActionsInputSchema, ownerActionsHostResultSchema, ownerActionsResultSchema, ownerAnswerRequestSchema, ownerAnswerResultSchema } from "./owner-actions-contract.js";
 
 export const missionIdSchema = z.string().regex(/^mission_[a-f0-9]{32}$/);
 export const missionInputSchema = z.object({ missionId: missionIdSchema }).strict();
@@ -17,6 +18,7 @@ export const missionSchema = z.object({
 const taskFieldsSchema = z.object({
   id: z.string().regex(/^task_[a-f0-9]{32}$/),
   version: z.number().int().positive(),
+  context_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   mission_id: missionIdSchema,
   title: z.string().max(4000),
   expected_result: z.string().max(4000).nullable(),
@@ -113,9 +115,32 @@ const resultsSchema = z.object({
   truncated: z.boolean(), error_code: z.string().max(200).nullable(),
 });
 const sourceResultsSchema = resultsSchema.extend({ items: z.array(partialResultSchema.extend({ artifact: sourceArtifactSchema })).max(5) });
+export const taskInputBindingSchema = z.object({
+  scope: z.literal("explicit_task_input"), state: z.enum(["available", "not_bound", "unavailable", "error"]),
+  binding: z.object({ id: z.string().regex(/^task_input_[a-f0-9]{32}$/), binding_hash: hashSchema,
+    note_id: noteIdSchema, mission_id: missionIdSchema, task_id: taskIdSchema,
+    task_version: z.number().int().positive(), context_hash: hashSchema, task_title: boundedText(4000),
+    note_version: z.number().int().positive(), created_at: timestampSchema }).nullable(),
+  task_current: nullableFlag, context_current: nullableFlag, note_current: nullableFlag,
+  currentness: z.enum(["current", "historical", "unknown"]), mission_state: z.string().max(100).nullable(),
+  error_code: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).nullable(),
+  execution_performed: z.literal(false), task_mutation_performed: z.literal(false),
+});
+const publishedPlanTasksSchema = z.object({
+  state: z.enum(["available", "not_published", "unavailable", "error"]), run_id: z.string().max(200).nullable(),
+  plan_payload_hash: hashSchema.nullable(), items: z.array(z.object({
+    action_ordinal: z.number().int().nonnegative(), task_id: taskIdSchema, mission_id: missionIdSchema,
+    published_task_version: z.literal(1), task_version: z.number().int().positive(),
+    task_state: z.enum(taskStates), title: boundedText(4000), task_title: boundedText(4000),
+    published_context_hash: hashSchema, task_context_hash: hashSchema,
+    version_current: z.boolean(), context_current: z.boolean(), task_context_current: z.boolean(), binding_current: z.boolean(),
+  })).max(20), total_count: z.number().int().nonnegative().nullable(), truncated: z.boolean(),
+  error_code: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).nullable(),
+});
 export const inputItemSchema = z.object({
   id: noteIdSchema, project_id: z.string().max(100).nullable(), text: boundedText(20000), input_kind: z.enum(["text", "voice"]),
   state: z.enum(["new", "reviewing", "planned", "done"]), version: z.number().int().positive(), mission_id: missionIdSchema.nullable(),
+  task_input: taskInputBindingSchema.optional(), plan_tasks: publishedPlanTasksSchema.optional(),
   mission_link_state: z.enum(["linked", "unlinked"]), created_at: timestampSchema, updated_at: timestampSchema, triage: triageSchema, results: resultsSchema,
 });
 export const inputDetailSchema = inputItemSchema.extend({ response: boundedText(20000) });
@@ -306,6 +331,8 @@ export const submitInputSchema = lookupInputSchema.extend({
   target: z.discriminatedUnion("scope", [
     z.object({ scope: z.literal("personal") }).strict(),
     z.object({ scope: z.literal("mission"), missionId: missionIdSchema, expectedMissionVersion: z.number().int().positive() }).strict(),
+    z.object({ scope: z.literal("task"), missionId: missionIdSchema, expectedMissionVersion: z.number().int().positive(),
+      taskId: taskIdSchema, expectedTaskVersion: z.number().int().positive(), contextHash: hashSchema }).strict(),
   ]),
   inputKind: z.enum(["text", "voice"]).optional(),
 }).strict();
@@ -324,11 +351,13 @@ export const submissionResultSchema = z.discriminatedUnion("state", [
     receiptState: z.literal("new"),
     missionId: missionIdSchema.nullable(),
     missionVersion: z.number().int().positive().nullable(),
+    taskBinding: z.object({ id: z.string().regex(/^task_input_[a-f0-9]{32}$/), hash: hashSchema,
+      taskId: taskIdSchema, taskVersion: z.number().int().positive(), contextHash: hashSchema }).optional(),
   }).strict(),
   z.object({ ...submissionIdentity, state: z.literal("outcome_unknown"), reason: z.enum(["host_unavailable", "service_unavailable", "invalid_response", "storage_unavailable", "delivery_unconfirmed"]) }).strict(),
   z.object({ ...submissionIdentity, state: z.literal("blocked"), reason: z.enum(["host_changed", "request_mismatch", "host_not_configured"]) }).strict(),
   z.object({ ...submissionIdentity, state: z.literal("not_sent"), reason: z.literal("host_not_configured") }).strict(),
-  z.object({ ...submissionIdentity, state: z.literal("rejected"), reason: z.enum(["version_conflict", "idempotency_conflict", "source_rejected"]) }).strict(),
+  z.object({ ...submissionIdentity, state: z.literal("rejected"), reason: z.enum(["version_conflict", "idempotency_conflict", "source_rejected", "context_changed", "task_changed"]) }).strict(),
 ]);
 
 export const submissionLookupResultSchema = z.union([
@@ -337,6 +366,8 @@ export const submissionLookupResultSchema = z.union([
 ]);
 
 export const personalOsHostContract = defineRpcContract({
+  getOwnerActions: { input: ownerActionsInputSchema, output: ownerActionsHostResultSchema },
+  answerOwnerAction: { input: ownerAnswerRequestSchema, output: ownerAnswerResultSchema },
   listMissions: {
     input: z.null(),
     output: readResultSchema(z.object({ missions: z.array(missionSchema).max(100) }).strict()),
@@ -357,6 +388,7 @@ export const personalOsHostContract = defineRpcContract({
 
 export const personalOsContract = defineRpcContract({
   ...personalOsHostContract,
+  getOwnerActions: { input: ownerActionsInputSchema, output: ownerActionsResultSchema },
   getInputSubmission: { input: lookupInputSchema, output: submissionLookupResultSchema },
   openTaskChat: { input: openTaskChatInputSchema, output: openTaskChatResultSchema },
 });
@@ -374,6 +406,7 @@ export type MissionsResult = z.infer<typeof personalOsContract.listMissions.outp
 export type MissionResult = z.infer<typeof personalOsContract.getMission.output>;
 export type TasksResult = z.infer<typeof personalOsContract.listTasks.output>;
 export type SubmitInput = z.infer<typeof submitInputSchema>;
+export type TaskInputBinding = z.infer<typeof taskInputBindingSchema>;
 export type SubmissionResult = z.infer<typeof submissionResultSchema>;
 export type SubmissionLookupResult = z.infer<typeof submissionLookupResultSchema>;
 export type ListInputsInput = z.infer<typeof listInputsInputSchema>;
