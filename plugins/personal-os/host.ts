@@ -260,6 +260,7 @@ async function readTaskCodeResult(taskId: string, bindingId: string, signal: Abo
       artifacts: pack.artifacts.map(publicArtifact), content: { summary: report.summary, checks: report.checks.map(({ id, status, exit_code, duration_ms }) => ({ id, status, exit_code, duration_ms })),
         changed_files: report.changed_files, base_sha: report.base_sha, result_sha: report.result_sha, result_tree: report.result_tree, error_code: report.error_code, acceptance: report.acceptance, checks_basis: "reported" },
       verification, domainDelivery: binding.domainDelivery, activityReadAt: activity.data.read_at, integrity: "sha256_verified", packageFiles: "owner_sha256_verified", productAcceptance: false,
+      ...(binding.code_review !== undefined ? { codeReview: binding.code_review } : {}),
     } };
   } catch {
     return { state: "unavailable", observedAt: new Date().toISOString(), reason: received && !controller.signal.aborted ? "invalid_response" : "service_unavailable" };

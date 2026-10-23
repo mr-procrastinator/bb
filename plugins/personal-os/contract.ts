@@ -291,12 +291,25 @@ const taskInputResultSchema = z.object({
   state: z.enum(["prepared", "pending", "attached", "blocked", "error", "not_registered", "unavailable"]), note_id: noteIdSchema.nullable(),
   attachment_id: resultIdSchema.nullable(), retryable: z.boolean(), error_code: z.string().max(200).nullable(),
 });
+export const codeReviewSchema = z.object({
+  state: z.enum(["available", "not_registered", "unavailable", "error"]), scope: z.literal("task_code_review"),
+  run: z.object({ id: nativeDeliveryIdSchema, phase: z.string().min(1).max(100), native_run_id: nativeDeliveryIdSchema.nullable(), native_state: z.string().min(1).max(100).nullable(),
+    launch_count: z.union([z.literal(0), z.literal(1)]), updated_at: timestampSchema, error_code: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).nullable() }).nullable(),
+  binding_current: nullableFlag,
+  report: z.object({ summary: z.string().max(8000), entries: z.array(z.object({ kind: z.enum(["criterion", "outcome"]), id: nativeDeliveryIdSchema,
+    label: z.string().max(4000), result: z.enum(["pass", "fail", "unknown", "not_run"]), reason: z.string().max(4000) })).max(10),
+    total_count: z.number().int().nonnegative(), truncated: z.boolean(), findings_count: z.number().int().nonnegative(), rechecks_count: z.number().int().nonnegative() }).nullable(),
+  consumer_review: z.object({ id: z.string().regex(/^consumer_review_[a-f0-9]{32}$/), outcome: z.enum(["changes_required", "no_blocking_findings", "inconclusive"]),
+    finding_ids: z.array(z.string().regex(/^mission_finding_[a-f0-9]{32}$/)).max(100) }).nullable(),
+  gate_blockers: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,99}$/)).max(30).nullable(), outcome: z.enum(["pass", "fail", "unknown", "not_run"]).nullable(),
+  files: z.literal("not_rechecked"), live_process_verified: z.literal(false), completion_available: z.literal(false),
+});
 export const taskExecutionBindingSchema = z.object({
   id: taskExecutionIdSchema, created_at: timestampSchema, bound_task_version: z.number().int().positive(), task_version_current: nullableFlag, task_context_current: nullableFlag,
   currentness: z.enum(["current", "historical", "unknown"]), binding_state: z.enum(["enabled", "fenced"]), binding_error_code: z.string().max(200).nullable(),
   continuation: z.object({ id: z.string().regex(/^continuation_[a-f0-9]{32}$/), delegation_id: z.string().regex(/^delegation_[a-f0-9]{32}$/), attempt_id: z.string().regex(/^attempt_[a-f0-9]{32}$/).nullable(),
     revision: z.number().int().positive(), phase: z.string().min(1).max(100), launch_count: z.union([z.literal(0), z.literal(1)]), error_code: z.string().max(200).nullable(), created_at: timestampSchema, updated_at: timestampSchema }),
-  artifact_kind: z.literal("code").optional(), code_package: codePackageSchema.optional(),
+  artifact_kind: z.literal("code").optional(), code_package: codePackageSchema.optional(), code_review: codeReviewSchema.optional(),
   artifact: z.object({ state: z.enum(["received", "not_received", "unavailable", "error"]), error_code: z.string().max(200).nullable(), receipt: z.union([taskResearchReceiptSchema, codeManifestSchema]).nullable() }),
   review: taskReviewSchema, domainDelivery: domainDeliverySchema, input_result: taskInputResultSchema, live_process_verified: z.literal(false), domain_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
 });
@@ -382,7 +395,7 @@ const taskCodeResultSchema = z.object({
   content: z.object({ summary: z.string().max(12000), checks: z.array(z.object({ id: z.string().min(1).max(200), status: z.enum(["passed", "failed", "timeout", "not_run"]), exit_code: z.number().int().nullable(), duration_ms: z.number().int().nonnegative() })).max(10), changed_files: z.array(codePathSchema).max(100),
     base_sha: gitHashSchema, result_sha: gitHashSchema.nullable(), result_tree: gitHashSchema.nullable(), error_code: codeArtifactFields.error_code.unwrap(), acceptance: codeArtifactFields.acceptance, checks_basis: z.literal("reported") }),
   verification: codeVerificationSchema, domainDelivery: domainDeliverySchema, activityReadAt: timestampSchema, integrity: z.literal("sha256_verified"),
-  packageFiles: z.literal("owner_sha256_verified"), productAcceptance: z.literal(false),
+  packageFiles: z.literal("owner_sha256_verified"), productAcceptance: z.literal(false), codeReview: codeReviewSchema.optional(),
 });
 
 export const lookupInputSchema = z.object({
@@ -489,3 +502,5 @@ export type MissionActivityResult = z.infer<typeof personalOsContract.getMission
 export type TaskResult = z.infer<typeof personalOsContract.getTaskResult.output>;
 
 export type TaskCodeResult = z.infer<typeof personalOsContract.getTaskCodeResult.output>;
+
+export type CodeReviewRead = z.infer<typeof codeReviewSchema>;

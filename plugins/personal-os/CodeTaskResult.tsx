@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import { Button } from "@/components/ui/button";
+import { CodeReview } from "./CodeReview.js";
 import type { DomainDeliveryRead, PersonalOsContract, TaskCodeResult } from "./contract.js";
 
 type CodeData = Extract<TaskCodeResult, { state: "available" }>["data"];
@@ -50,7 +51,8 @@ export function CodeTaskResult({ missionId, taskId, bindingId, renderDelivery }:
         </details>)}</div>
         <p className="text-xs text-muted-foreground">Personal OS перечитала сохранённые файлы и проверила их SHA-256. BB отдельно проверил hash отчёта. Просмотр только читает сохранённый пакет.</p>
       </section>
-      {renderDelivery(data.domainDelivery, data.artifact, data.artifacts)}
+      <CodeReview review={data.codeReview} />
+      {data.codeReview?.state === "available" ? <details className="rounded-lg border border-border p-4"><summary className="cursor-pointer text-sm font-medium">Протокол поставки</summary><div className="pt-3">{renderDelivery(data.domainDelivery, data.artifact, data.artifacts)}</div></details> : renderDelivery(data.domainDelivery, data.artifact, data.artifacts)}
       <section className="space-y-3 rounded-lg border border-border p-4">
         <h2 className="text-base font-semibold">Проверки в отчёте исполнителя</h2>
         {data.content.checks.length ? <ul className="space-y-3">{data.content.checks.map(check => <li key={check.id} className="flex flex-wrap justify-between gap-2 text-sm"><span className="break-words">{check.id}</span><span className="text-muted-foreground">{checkLabels[check.status]} · {(check.duration_ms / 1000).toLocaleString("ru-RU")} с{check.exit_code !== null ? " · код " + check.exit_code : ""}</span></li>)}</ul> : <p className="text-sm text-muted-foreground">Проверки не указаны.</p>}
