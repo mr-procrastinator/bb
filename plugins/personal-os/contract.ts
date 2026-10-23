@@ -232,6 +232,40 @@ const taskResearchReceiptSchema = publicArtifactSchema.extend({ acceptance: z.li
 const sourceTaskResearchReceiptSchema = taskResearchReceiptSchema.extend({
   receipt_id: z.string().min(1).max(200), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/), revision: z.number().int().positive(), input_hash: hashSchema.nullable().optional(),
 });
+const codeArtifactFields = {
+  name: z.enum(["code.json", "proposal.patch", "proposal.bundle"]), sha256: hashSchema, size: z.number().int().nonnegative().max(8 * 1024 * 1024),
+  acceptance: z.enum(["verification_pending", "not_produced"]), availability: z.literal("not_rechecked"), error_code: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).nullable().optional(),
+};
+const codeArtifactSchema = z.object(codeArtifactFields).refine(value => value.size <= (value.name === "code.json" ? 256 * 1024 : value.name === "proposal.patch" ? 2 * 1024 * 1024 : 8 * 1024 * 1024));
+const codeManifestSchema = z.object({ ...codeArtifactFields, name: z.literal("code.json"), size: z.number().int().positive().max(256 * 1024), error_code: codeArtifactFields.error_code.unwrap() });
+const sourceCodeArtifactFields = {
+  receipt_id: z.string().regex(/^artifact_receipt_[a-f0-9]{32}$/), did: z.string().regex(/^delegation_[a-f0-9]{32}$/), aid: z.string().regex(/^attempt_[a-f0-9]{32}$/),
+  revision: z.number().int().positive(), input_hash: hashSchema,
+};
+const sourceCodeArtifactSchema = z.object({ ...codeArtifactFields, ...sourceCodeArtifactFields }).refine(value => value.size <= (value.name === "code.json" ? 256 * 1024 : value.name === "proposal.patch" ? 2 * 1024 * 1024 : 8 * 1024 * 1024));
+const sourceCodeManifestSchema = codeManifestSchema.extend(sourceCodeArtifactFields);
+const gitHashSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+const codeVerificationSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("reconstructed"), product_acceptance: z.literal(false), base_sha: gitHashSchema, result_sha: gitHashSchema, result_tree: gitHashSchema, checked_at: timestampSchema }),
+  z.object({ state: z.literal("not_produced"), product_acceptance: z.literal(false) }),
+]);
+const codePackageFields = { state: z.enum(["available", "not_received", "unavailable", "error"]), verification: codeVerificationSchema.nullable(),
+  error_code: z.string().max(200).nullable(), files: z.literal("not_rechecked"), product_acceptance: z.literal(false) };
+const codePackageSchema = z.object({ ...codePackageFields, manifest: codeManifestSchema.nullable(), artifacts: z.array(codeArtifactSchema).max(3) });
+const sourceCodePackageSchema = z.object({ ...codePackageFields, manifest: sourceCodeManifestSchema.nullable(), artifacts: z.array(sourceCodeArtifactSchema).max(3) });
+const codeCheckSchema = z.object({ id: z.string().min(1).max(200), status: z.enum(["passed", "failed", "timeout", "not_run"]), exit_code: z.number().int().nullable(), duration_ms: z.number().int().nonnegative(),
+  argv_hash: hashSchema, output_sha256: hashSchema.nullable() }).refine(value => value.status !== "passed" || value.exit_code === 0);
+const codePathSchema = z.string().min(1).max(500).refine(value => !value.startsWith("/") && !/[\\\u0000-\u001f\u007f]/.test(value) && value.split("/").every(part => part !== "" && part !== "." && part !== ".." && part !== ".git"));
+export const codeManifestReportSchema = z.object({ schema_version: z.literal(1), kind: z.literal("code"), attempt_id: sourceCodeArtifactFields.aid, input_hash: hashSchema,
+  delegation_id: sourceCodeArtifactFields.did, revision: z.number().int().positive(), repository: z.string().min(1).max(1000), base_sha: gitHashSchema,
+  result_sha: gitHashSchema.nullable(), result_tree: gitHashSchema.nullable(), context_hash: hashSchema.nullable(), requested_model: z.string().max(200).nullable(), model: z.null(), usage: z.null(),
+  summary: z.string().max(12000), checks: z.array(codeCheckSchema).max(10), changed_files: z.array(codePathSchema).max(100),
+  artifact_refs: z.array(z.object({ name: z.enum(["proposal.patch", "proposal.bundle"]), sha256: hashSchema, size: z.number().int().nonnegative().max(8 * 1024 * 1024) })).max(2),
+  error_code: codeArtifactFields.error_code.unwrap(), acceptance: codeArtifactFields.acceptance, quality_gate: z.literal("not_run"),
+}).refine(value => new Set(value.changed_files).size === value.changed_files.length && new Set(value.checks.map(item => item.id)).size === value.checks.length
+  && new Set(value.artifact_refs.map(item => item.name)).size === value.artifact_refs.length && value.artifact_refs.every(item => item.size <= (item.name === "proposal.patch" ? 2 * 1024 * 1024 : 8 * 1024 * 1024))
+  && (value.error_code === null ? value.acceptance === "verification_pending" && value.result_sha !== null && value.result_tree !== null && value.changed_files.length > 0 && value.checks.every(item => item.status === "passed") && value.artifact_refs.length === 2
+    : value.acceptance === "not_produced" && value.result_sha === null && value.result_tree === null && value.artifact_refs.every(item => item.name !== "proposal.bundle")));
 const readinessIdentitySchema = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/);
 const readinessCountSchema = z.number().int().nonnegative();
 const readinessCoverageFields = { total: readinessCountSchema, reported_checked: readinessCountSchema, reported_passed: readinessCountSchema, missing: readinessCountSchema };
@@ -262,11 +296,13 @@ export const taskExecutionBindingSchema = z.object({
   currentness: z.enum(["current", "historical", "unknown"]), binding_state: z.enum(["enabled", "fenced"]), binding_error_code: z.string().max(200).nullable(),
   continuation: z.object({ id: z.string().regex(/^continuation_[a-f0-9]{32}$/), delegation_id: z.string().regex(/^delegation_[a-f0-9]{32}$/), attempt_id: z.string().regex(/^attempt_[a-f0-9]{32}$/).nullable(),
     revision: z.number().int().positive(), phase: z.string().min(1).max(100), launch_count: z.union([z.literal(0), z.literal(1)]), error_code: z.string().max(200).nullable(), created_at: timestampSchema, updated_at: timestampSchema }),
-  artifact: z.object({ state: z.enum(["received", "not_received", "unavailable", "error"]), error_code: z.string().max(200).nullable(), receipt: taskResearchReceiptSchema.nullable() }),
+  artifact_kind: z.literal("code").optional(), code_package: codePackageSchema.optional(),
+  artifact: z.object({ state: z.enum(["received", "not_received", "unavailable", "error"]), error_code: z.string().max(200).nullable(), receipt: z.union([taskResearchReceiptSchema, codeManifestSchema]).nullable() }),
   review: taskReviewSchema, domainDelivery: domainDeliverySchema, input_result: taskInputResultSchema, live_process_verified: z.literal(false), domain_acceptance: z.literal("not_assessed"), completion_available: z.literal(false),
 });
 const sourceTaskExecutionBindingSchema = taskExecutionBindingSchema.extend({
-  artifact: taskExecutionBindingSchema.shape.artifact.extend({ receipt: sourceTaskResearchReceiptSchema.nullable() }),
+  code_package: sourceCodePackageSchema.optional(),
+  artifact: taskExecutionBindingSchema.shape.artifact.extend({ receipt: z.union([sourceTaskResearchReceiptSchema, sourceCodeManifestSchema]).nullable() }),
 });
 const dispatcherSchema = z.object({
   policy_id: z.string().min(1).max(200), task_id: taskIdSchema, bound_task_version: z.number().int().positive(), task_version_current: z.boolean(),
@@ -313,13 +349,40 @@ function deliveryMatchesReceipt(delivery: z.infer<typeof domainDeliverySchema>, 
   const item = delivery.item;
   return item === null || receipt !== null && item.delegation_id === receipt.did && item.attempt_id === receipt.aid && item.revision === receipt.revision && item.input_hash === receipt.input_hash && item.artifact_refs.length === 1 && item.artifact_refs[0].name === receipt.name && item.artifact_refs[0].sha256 === receipt.sha256 && item.artifact_refs[0].size === receipt.size;
 }
+function deliveryMatchesCode(binding: z.infer<typeof sourceTaskExecutionBindingSchema>) {
+  if (binding.artifact_kind !== "code") return binding.code_package === undefined && (binding.artifact.receipt === null || binding.artifact.receipt.name === "research.json") && deliveryMatchesReceipt(binding.domainDelivery, binding.artifact.receipt);
+  const pack = binding.code_package;
+  const manifest = pack?.manifest;
+  const receipt = binding.artifact.receipt;
+  if (!pack || receipt !== null && receipt.name !== "code.json") return false;
+  if (pack.state !== "available") return manifest === null && pack.artifacts.length === 0 && pack.verification === null && receipt === null && binding.domainDelivery.item === null;
+  if (!manifest || !receipt || !pack.verification || binding.artifact.state !== "received" || manifest.did !== binding.continuation.delegation_id || manifest.aid !== binding.continuation.attempt_id || manifest.revision !== binding.continuation.revision) return false;
+  if (receipt.name !== "code.json" || JSON.stringify(manifest) !== JSON.stringify(receipt)) return false;
+  const names = new Set(pack.artifacts.map(item => item.name));
+  if (names.size !== pack.artifacts.length || !names.has("code.json") || !pack.artifacts.every(item => item.did === manifest.did && item.aid === manifest.aid && item.revision === manifest.revision && item.input_hash === manifest.input_hash && item.acceptance === manifest.acceptance)) return false;
+  const savedManifest = pack.artifacts.find(item => item.name === "code.json");
+  if (!savedManifest || savedManifest.sha256 !== manifest.sha256 || savedManifest.size !== manifest.size || savedManifest.receipt_id !== manifest.receipt_id) return false;
+  if (pack.verification.state === "reconstructed" ? names.size !== 3 || manifest.error_code !== null || manifest.acceptance !== "verification_pending" : names.has("proposal.bundle") || manifest.error_code == null || manifest.acceptance !== "not_produced") return false;
+  const delivery = binding.domainDelivery.item;
+  return delivery === null || delivery.scope === "bounded_code_source_review" && delivery.delegation_id === manifest.did && delivery.attempt_id === manifest.aid && delivery.revision === manifest.revision && delivery.input_hash === manifest.input_hash
+    && delivery.artifact_refs.length === pack.artifacts.length && new Set(delivery.artifact_refs.map(ref => ref.name)).size === pack.artifacts.length && delivery.artifact_refs.every(ref => pack.artifacts.some(item => item.name === ref.name && item.sha256 === ref.sha256 && item.size === ref.size));
+}
 export const sourceTaskActivitySchema = taskActivitySchema.extend({ items: z.array(sourceTaskActivityItemSchema).max(50) })
-  .refine(value => value.items.every(item => item.completion.task_version === item.task.version && item.completion.context_current === item.task.context_current && item.bindings.items.every(binding => deliveryMatchesReceipt(binding.domainDelivery, binding.artifact.receipt)) && item.completion.items.every(ground => ground.artifact === null || deliveryMatchesReceipt(ground.artifact.domainDelivery, ground.artifact)) && item.bindings.items.every(binding => binding.review.readiness === null || binding.review.readiness.candidate_id === binding.review.candidate_id && binding.review.readiness.review_id === binding.review.review_id) && item.completion.items.every(ground => ground.review === null || ground.review.readiness === null || ground.review.readiness.candidate_id === ground.review.candidate_id && ground.review.readiness.review_id === ground.review.id) && (item.completion.state !== "recorded" || item.task.state === "done") && item.bindings.items.every(binding => binding.currentness !== "current" || (binding.task_version_current === true && binding.task_context_current === true && binding.bound_task_version === item.task.version && item.task.context_current === true)) && item.dispatchers.items.every(dispatcher => !dispatcher.task_version_current || dispatcher.bound_task_version === item.task.version)));
+  .refine(value => value.items.every(item => item.completion.task_version === item.task.version && item.completion.context_current === item.task.context_current && item.bindings.items.every(binding => deliveryMatchesCode(binding)) && item.completion.items.every(ground => ground.artifact === null || deliveryMatchesReceipt(ground.artifact.domainDelivery, ground.artifact)) && item.bindings.items.every(binding => binding.review.readiness === null || binding.review.readiness.candidate_id === binding.review.candidate_id && binding.review.readiness.review_id === binding.review.review_id) && item.completion.items.every(ground => ground.review === null || ground.review.readiness === null || ground.review.readiness.candidate_id === ground.review.candidate_id && ground.review.readiness.review_id === ground.review.id) && (item.completion.state !== "recorded" || item.task.state === "done") && item.bindings.items.every(binding => binding.currentness !== "current" || (binding.task_version_current === true && binding.task_context_current === true && binding.bound_task_version === item.task.version && item.task.context_current === true)) && item.dispatchers.items.every(dispatcher => !dispatcher.task_version_current || dispatcher.bound_task_version === item.task.version)));
 const taskResultSchema = z.object({
   taskId: taskIdSchema, missionId: missionIdSchema, bindingId: taskExecutionIdSchema, boundTaskVersion: z.number().int().positive(), currentness: z.enum(["current", "historical", "unknown"]),
   taskVersionCurrent: nullableFlag, taskContextCurrent: nullableFlag, artifact: publicArtifactSchema, content: researchContentSchema, review: taskReviewSchema,
   completionEvidence: z.object({ taskVersion: z.number().int().positive(), contextCurrent: nullableFlag, items: z.array(completionEvidenceSchema).max(30) }).nullable(),
   domainDelivery: domainDeliverySchema, activityReadAt: timestampSchema, integrity: z.literal("sha256_verified"),
+});
+
+const taskCodeResultSchema = z.object({
+  taskId: taskIdSchema, missionId: missionIdSchema, bindingId: taskExecutionIdSchema, boundTaskVersion: z.number().int().positive(), currentness: z.enum(["current", "historical", "unknown"]),
+  taskVersionCurrent: nullableFlag, taskContextCurrent: nullableFlag, artifact: codeManifestSchema, artifacts: z.array(codeArtifactSchema).min(1).max(3),
+  content: z.object({ summary: z.string().max(12000), checks: z.array(z.object({ id: z.string().min(1).max(200), status: z.enum(["passed", "failed", "timeout", "not_run"]), exit_code: z.number().int().nullable(), duration_ms: z.number().int().nonnegative() })).max(10), changed_files: z.array(codePathSchema).max(100),
+    base_sha: gitHashSchema, result_sha: gitHashSchema.nullable(), result_tree: gitHashSchema.nullable(), error_code: codeArtifactFields.error_code.unwrap(), acceptance: codeArtifactFields.acceptance, checks_basis: z.literal("reported") }),
+  verification: codeVerificationSchema, domainDelivery: domainDeliverySchema, activityReadAt: timestampSchema, integrity: z.literal("sha256_verified"),
+  packageFiles: z.literal("owner_sha256_verified"), productAcceptance: z.literal(false),
 });
 
 export const lookupInputSchema = z.object({
@@ -383,6 +446,7 @@ export const personalOsHostContract = defineRpcContract({
   getTaskActivity: { input: taskChatInputSchema, output: readResultSchema(taskActivitySchema) },
   getMissionActivity: { input: missionInputSchema, output: readResultSchema(taskActivitySchema) },
   getTaskResult: { input: taskResultInputSchema, output: readResultSchema(taskResultSchema) },
+  getTaskCodeResult: { input: taskResultInputSchema, output: readResultSchema(taskCodeResultSchema) },
   submitInput: { input: submitInputSchema, output: submissionResultSchema },
 });
 
@@ -423,3 +487,5 @@ export type TaskExecutionBinding = z.infer<typeof taskExecutionBindingSchema>;
 export type TaskActivityResult = z.infer<typeof personalOsContract.getTaskActivity.output>;
 export type MissionActivityResult = z.infer<typeof personalOsContract.getMissionActivity.output>;
 export type TaskResult = z.infer<typeof personalOsContract.getTaskResult.output>;
+
+export type TaskCodeResult = z.infer<typeof personalOsContract.getTaskCodeResult.output>;

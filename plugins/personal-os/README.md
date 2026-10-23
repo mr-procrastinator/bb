@@ -43,6 +43,7 @@ bb personal-os tasks mission_0123456789abcdef0123456789abcdef
 bb personal-os task-activity task_0123456789abcdef0123456789abcdef
 bb personal-os mission-activity mission_0123456789abcdef0123456789abcdef
 bb personal-os task-result task_0123456789abcdef0123456789abcdef task_execution_0123456789abcdef0123456789abcdef
+bb personal-os task-code-result <task_id> <task_execution_binding_id>
 bb personal-os inputs
 bb personal-os inputs mission_0123456789abcdef0123456789abcdef
 bb personal-os input note_0123456789abcdef0123456789abcdef
@@ -91,6 +92,24 @@ and currentness are projected. This works before an inbox-result attachment
 exists. Historical exact results remain readable with historical flags. Current
 file accessibility is established only when the read succeeds; metadata alone
 retains `availability:not_rechecked`.
+
+`getTaskCodeResult` / `task-code-result` is a separate reader for a binding explicitly
+marked `artifact_kind:code`. **Проверить code-пакет** opens its exact task/binding page.
+The activity projection contains metadata only. An explicit file read asks the owner
+to recheck all retained package files and their saved reconstruction proof. BB then
+verifies the raw `code.json` size and SHA-256 before parsing, matches delegation,
+attempt, revision, input hash and the exact retained-file set, and returns public
+summary/checks/file names. Repository paths and private receipt/source fields stay
+on the host. Code results require a binding in the bounded five-item task history;
+omitted older code bindings are unavailable through this reader.
+
+A reconstructed package has `code.json` (≤256 KiB), `proposal.patch` (≤2 MiB) and
+`proposal.bundle` (≤8 MiB). A failed `not_produced` attempt can retain only its report
+and optional patch; it is not shown as a complete package. Checks are reported by
+the executor; an empty check list remains unknown work, not a passed check. The
+page displays saved Git reconstruction proof without running Git, building, applying
+or downloading the proposal. Full-set native Delivery is separate from byte
+integrity and from product/goal acceptance. The research reader remains unchanged.
 
 Task activity also exposes `completion` as a separate projection of recorded
 completion grounds. A `done` task update can increment task version while its

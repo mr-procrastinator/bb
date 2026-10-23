@@ -39,7 +39,7 @@ requirements and owner contracts stay in their own project documents.
 the configured host entry. Only the host reads `http://127.0.0.1:7317`, so a future cloud BB server
 does not mistake its own localhost for the user's Mac. No public Personal OS port or browser credentials.
 Reads cover goals/tasks, bounded instruction lists/details, explicit task activity and exact attached
-or task-bound research results. Bounded input uses the existing personal-inbox,
+or task-bound research/code results. Bounded input uses the existing personal-inbox,
 pinned-goal or exact task/version/context POST; local question answers use the existing
 decision owner. There is no arbitrary URL, redirect or browser-selected host.
 `/api/control` is excluded: its skill catalog snapshot can write skill-version observations.
@@ -87,8 +87,9 @@ Neither read starts work. A recorded continuation phase describes a saved attemp
 | --- | --- |
 | `TaskActivityBadge` | One short card label for a recorded attempt, saved autostart setup, received-file record, scoped review or current error. An explicitly empty, fully covered execution scope adds no badge. Unknown coverage and read errors remain visible; omitted tasks are not treated as never started. |
 | `TaskActivity` / `ExecutionStages` | The selected current attempt has three stages: **Исполнение → Файл → Проверка файла**. **Другие попытки** distinguishes current, historical and unknown bindings. More than one attempt may match the current conditions. A limited history stays marked incomplete. |
-| File action | **Проверить и прочитать** appears only for an exact binding with a received research receipt. `not_rechecked` is permission to ask the owner reader to check the file, not proof that its bytes are currently readable. Missing or unavailable file data supplies no file action. |
+| File action | **Проверить и прочитать** reads research; **Проверить code-пакет** reads a code manifest and its retained-file set. Both require an exact binding with a received receipt. `not_rechecked` is permission to ask the owner reader to check the file, not proof that its bytes are currently readable. Missing or unavailable file data supplies no file action. |
 | `TaskResultPage` | Reads that exact task/binding result, including an early file before instruction attachment. The host verifies size and SHA-256 before returning structured text. The page also checks the returned mission/task/binding against its route. Research conclusions describe the supplied material snapshot, not current system status. |
+| `CodeTaskResult` | Separate strict mission/task/code-binding route and `getTaskCodeResult` / `task-code-result` RPC/CLI. The owner rechecks retained files; BB verifies raw manifest size/hash before parsing and matches the exact manifest tuple, file set and saved proof. A full three-file package and a failed `not_produced` report are distinct. Checks remain executor reports; reading never builds, applies or downloads code. |
 | Review text | A saved owner review requires its review identity and outcome. Current conclusions additionally require current binding/candidate and applicability. A saved review-run phase alone does not establish a review, task completion or goal acceptance. |
 | Completion grounds | A done task separately resolves its exact artifact receipt and pinned consumer review. A historical execution binding stays historical after the task version changes. The exact file reader also shows these recorded grounds; the previous attempt review moves into history only when an exact current applicable completion review is present. Neither record establishes whole-goal acceptance. |
 | Proposed profile inspection | Exact candidate/review metadata shows five dimensions, the report's requirement scope, recorded criterion/state entries and blockers. Reported scores come from the assessment request, not from the prior review. Unknown scores stay unknown. This is consumer evidence bookkeeping, not native delivery readiness or goal acceptance. |
@@ -135,9 +136,10 @@ opening history. Historical and unknown states must still be distinguishable.
 ## Native Delivery and profile version projection
 
 The source now adds a read-only native Delivery view for the exact task-bound
-received research file, plus an exact profile/examples page. The generic Delivery DTO also
-accepts bounded code-source review metadata; `TaskResultPage` remains research-only and
-does not open code bundles or prove application execution. Native snapshots
+received research or code file set, plus an exact profile/examples page. `TaskResultPage` remains
+research-only. The separate `CodeTaskResult` reads an exact code manifest after owner package
+verification and renders bounded code-source Delivery against the complete retained-file set.
+It does not open bundle contents, apply code or prove application execution. Native snapshots
 carry a separate bounded Delivery collection; legacy execution and immutable
 artifact manifests retain their existing contract. Personal OS selects by exact
 DID/revision/attempt/input/request/profile/artifact identity from its saved
@@ -159,6 +161,10 @@ verified image inline, with 100% scrolling, fit-to-width and Escape to collapse.
 not refetch another file or add an acceptance action. Private source URLs remain hidden.
 See the [plugin read contract](../plugins/personal-os/README.md#native-delivery-and-exact-profile-reads)
 and Personal OS integration contracts §36 for fields and limits.
+
+Code limits and failure semantics are in the [task activity guide](../plugins/personal-os/README.md#task-activity).
+The targeted build after this code-reader change passed (reported by the root agent).
+Its task → code-result UI route and failed-package states have not yet received a live check.
 
 These additions describe implemented source boundaries. They do not add a new live
 verification claim to the checkpoints below.

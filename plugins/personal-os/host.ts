@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
 import { ownerActionsSchema, type OwnerAnswerRequest, type OwnerAnswerResult } from "./owner-actions-contract.js";
-import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, sourceQualityProfileResponseSchema, qualityReferenceAssetSchema, type QualityReferenceSelection, type QualityReferenceResult, type InputItem, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
+import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, codeManifestReportSchema, sourceQualityProfileResponseSchema, qualityReferenceAssetSchema, type QualityReferenceSelection, type QualityReferenceResult, type InputItem, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult, type TaskCodeResult } from "./contract.js";
 
 const BASE_URL = "http://127.0.0.1:7317";
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -194,12 +194,13 @@ async function readTaskResult(taskId: string, bindingId: string, signal: AbortSi
   const matches = task.bindings.state === "available" ? task.bindings.items.filter(binding => binding.id === bindingId) : [];
   if (matches.length > 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
   const binding = matches[0];
+  if (binding?.artifact_kind === "code") return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
   const grounds = task.completion.state === "recorded" ? task.completion.items.filter(item => item.state === "resolved" && item.artifact?.binding_id === bindingId) : [];
   const recordedArtifacts = grounds.map(item => item.artifact!);
   if (new Set(recordedArtifacts.map(artifact => JSON.stringify(artifact))).size > 1) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
   const completionArtifact = recordedArtifacts[0];
   const artifact = binding?.artifact.state === "received" ? binding.artifact.receipt : completionArtifact;
-  if (artifact == null || !binding && !completionArtifact) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+  if (artifact == null || artifact.name !== "research.json" || !binding && !completionArtifact) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
   if (binding && (artifact.did !== binding.continuation.delegation_id || artifact.aid !== binding.continuation.attempt_id || artifact.revision !== binding.continuation.revision)) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
   if (completionArtifact && (artifact.sha256 !== completionArtifact.sha256 || artifact.size !== completionArtifact.size || artifact.did !== completionArtifact.did || artifact.aid !== completionArtifact.aid || artifact.revision !== completionArtifact.revision)) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
   const path = "/api/task-execution/" + encodeURIComponent(bindingId) + "/artifact?task_id=" + encodeURIComponent(taskId);
@@ -215,6 +216,57 @@ async function readTaskResult(taskId: string, bindingId: string, signal: AbortSi
     domainDelivery: binding?.domainDelivery ?? completionArtifact!.domainDelivery,
     activityReadAt: activity.data.read_at, integrity: "sha256_verified",
   } };
+}
+
+async function readTaskCodeResult(taskId: string, bindingId: string, signal: AbortSignal): Promise<TaskCodeResult> {
+  const activity = await readTaskActivity(taskId, signal);
+  if (activity.state !== "available") return activity;
+  const task = activity.data.items[0];
+  if (activity.data.state !== "available" || !task || task.bindings.state !== "available") return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+  const matches = task.bindings.items.filter(binding => binding.id === bindingId);
+  const binding = matches.length === 1 ? matches[0] : null;
+  const pack = binding?.artifact_kind === "code" ? binding.code_package : null;
+  if (!binding || !pack || pack.state !== "available" || !pack.manifest || !pack.verification) return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+  const artifact = pack.manifest;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) controller.abort();
+  const timer = setTimeout(abort, TIMEOUT_MS);
+  let received = false;
+  try {
+    const path = "/api/task-execution/" + encodeURIComponent(bindingId) + "/artifact?task_id=" + encodeURIComponent(taskId);
+    const response = await fetch(BASE_URL + path, { method: "GET", redirect: "error", headers: { Accept: "application/json" }, signal: controller.signal });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { state: "unavailable", observedAt: new Date().toISOString(), reason: "service_unavailable" };
+    }
+    received = true;
+    const bytes = await responseBytes(response, 256 * 1024);
+    if (bytes.byteLength !== artifact.size || createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("invalid_response");
+    const report = codeManifestReportSchema.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+    if (report.delegation_id !== artifact.did || report.attempt_id !== artifact.aid || report.revision !== artifact.revision || report.input_hash !== artifact.input_hash
+      || report.acceptance !== artifact.acceptance || report.error_code !== artifact.error_code) throw new Error("invalid_response");
+    const files = pack.artifacts.filter(item => item.name !== "code.json");
+    if (files.length !== report.artifact_refs.length || !files.every(item => report.artifact_refs.some(ref => ref.name === item.name && ref.sha256 === item.sha256 && ref.size === item.size))) throw new Error("invalid_response");
+    const verification = pack.verification;
+    if (verification.state === "reconstructed" ? report.error_code !== null || verification.base_sha !== report.base_sha || verification.result_sha !== report.result_sha || verification.result_tree !== report.result_tree
+      : report.error_code === null) throw new Error("invalid_response");
+    const publicArtifact = (item: typeof pack.artifacts[number]) => ({ name: item.name, sha256: item.sha256, size: item.size, acceptance: item.acceptance, availability: item.availability, ...(item.error_code !== undefined ? { error_code: item.error_code } : {}) });
+    return { state: "available", observedAt: new Date().toISOString(), data: {
+      taskId, missionId: task.task.mission_id, bindingId, boundTaskVersion: binding.bound_task_version, currentness: binding.currentness,
+      taskVersionCurrent: binding.task_version_current, taskContextCurrent: binding.task_context_current,
+      artifact: { name: "code.json", sha256: artifact.sha256, size: artifact.size, acceptance: artifact.acceptance, availability: artifact.availability, error_code: artifact.error_code },
+      artifacts: pack.artifacts.map(publicArtifact), content: { summary: report.summary, checks: report.checks.map(({ id, status, exit_code, duration_ms }) => ({ id, status, exit_code, duration_ms })),
+        changed_files: report.changed_files, base_sha: report.base_sha, result_sha: report.result_sha, result_tree: report.result_tree, error_code: report.error_code, acceptance: report.acceptance, checks_basis: "reported" },
+      verification, domainDelivery: binding.domainDelivery, activityReadAt: activity.data.read_at, integrity: "sha256_verified", packageFiles: "owner_sha256_verified", productAcceptance: false,
+    } };
+  } catch {
+    return { state: "unavailable", observedAt: new Date().toISOString(), reason: received && !controller.signal.aborted ? "invalid_response" : "service_unavailable" };
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", abort);
+  }
 }
 
 async function submit(input: SubmitInput, signal: AbortSignal): Promise<SubmissionResult> {
@@ -361,6 +413,7 @@ export default experimental_defineHostEntry({
       return read("/api/task-execution?mission_id=" + encodeURIComponent(input.missionId) + "&limit=50", sourceTaskActivitySchema.refine(value => value.scope === "mission" && value.mission_id === input.missionId && value.task_id === null && value.items.every(item => item.task.mission_id === input.missionId && item.dispatchers.items.every(dispatcher => dispatcher.task_id === item.task.id))), context.signal, 1024 * 1024);
     },
     getTaskResult(input, context) { return readTaskResult(input.taskId, input.bindingId, context.signal); },
+    getTaskCodeResult(input, context) { return readTaskCodeResult(input.taskId, input.bindingId, context.signal); },
     submitInput(input, context) {
       return submit(input, context.signal);
     },

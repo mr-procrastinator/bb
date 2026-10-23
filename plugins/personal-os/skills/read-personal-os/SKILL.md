@@ -12,6 +12,7 @@ bb personal-os tasks <mission_id>
 bb personal-os task-activity <task_id>
 bb personal-os mission-activity <mission_id>
 bb personal-os task-result <task_id> <task_execution_binding_id>
+bb personal-os task-code-result <task_id> <task_execution_binding_id>
 bb personal-os inputs
 bb personal-os inputs <mission_id>
 bb personal-os input <note_id>
@@ -40,6 +41,16 @@ the file is currently accessible. Do not infer task completion or domain accepta
 received file or consumer review. No dispatcher, task mirror, code/bundle download or new artifact
 store is added by these commands.
 
+Use `task-code-result` only for an explicit `artifact_kind:code` binding returned by that
+exact task's bounded activity read. It rereads the owner-verified retained package, then
+checks raw manifest size/hash, exact attempt/input identity, file set and saved reconstruction
+proof before public projection. A reconstructed package has code.json, proposal.patch and
+proposal.bundle; `not_produced` can retain a report and optional patch without a complete
+package. Manifest limit is 256 KiB; patch 2 MiB; bundle 8 MiB. No file contents are applied,
+executed or downloaded to the browser. Checks are executor reports; an empty list is not a
+passed check. Preserve historical/unknown flags and distinguish byte integrity, saved Git
+proof, native Delivery and overall acceptance. Omitted older code bindings are not a full archive.
+
 Personal instructions are separate from goal-bound instructions. Read a note's original plan and
 partial results through `input`; do not reconstruct them from chat summaries. `input-artifact`
 verifies exact attachment bytes and projects structured text with that result's scoped review.
@@ -64,10 +75,14 @@ Reading is the default. Only when the user explicitly asks to save an instructio
 ```sh
 bb personal-os submit <request-uuid> <quoted-text>
 bb personal-os submit-mission <request-uuid> <mission_id> <expected-version> <quoted-text>
+bb personal-os submit-task <request-uuid> <mission_id> <expected-mission-version> <task_id> <expected-task-version> <context_hash> <quoted-text>
 bb personal-os submission <request-uuid>
 ```
 
-Choose personal input unless the user explicitly targets a goal. For goal input, read that exact goal
+Choose personal input unless the user explicitly targets a goal or task. For a task, pin its exact
+ID/version, goal/version and semantic context hash. Saving it does not mutate task state or publish
+a duplicate task. Never change these fields to recover an uncertain save.
+For goal input, read that exact goal
 and use its displayed version. Do not silently refresh the pinned version during a retry. Generate a
 UUID before the first submission and retain the exact UUID, text, scope and goal version until the
 outcome is known. The server pins the configured host before contacting Personal OS. Never choose a
@@ -85,11 +100,25 @@ CLI exit code 0 confirms a successful read or saved receipt. Code 1 covers known
 and target. A missing ledger entry is not permission to substitute a different request. Saving input
 does not grant execution, dispatch, or automatic chat creation.
 
+Only when the user explicitly answers an existing local owner question, use:
+
+```sh
+bb personal-os owner-actions <mission_id>
+bb personal-os answer-owner-action '<request-json>'
+```
+
+Submit the exact displayed answer envelope. Preserve
+the returned configured-host hash, UUID, question/mission versions, context and chosen option.
+A retry sends the same POST even if a later question read is resolved or omits that question.
+Host changes and unknown HTTP outcomes keep recovery pending; do not substitute another host
+or request. A saved answer records a local choice, not a grant or execution authority.
+
 If the host is unconfigured, show the missing setup. For explicit setup, an operator selects the exact
 enrolled Mac host ID with `bb plugin config personal-os set hostId <host_id>`. Never choose another host
 or expose port7317 merely to make a read succeed. Further setup and limits are in [the plugin README](../../README.md).
 
 The plugin can save owner input and explicitly request opening an owner-bound Desktop chat, but cannot
-start agents, edit goal/task status, answer decisions or change priorities. Read operations do not grant
+start agents, edit goal/task status or change priorities. Local owner-question answers require the
+explicit user instruction and exact recovery envelope described above. Read operations do not grant
 those actions. Personal OS owns user-goal acceptance; AiweApps owns
 domain quality and acceptance of its product delivery.
