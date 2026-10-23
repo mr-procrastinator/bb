@@ -596,8 +596,9 @@ function taskActivityLabel(activity: TaskActivityItem | null, task: Task, hideEm
   const current = activity.bindings.items.find(currentExecution);
   if (current) {
     if (current.binding_state === "fenced") return "Продолжение заблокировано";
+    if (current.artifact_kind === "code" && current.artifact.state === "received" && current.code_package?.verification?.state === "not_produced") return "Сохранён отчёт о неудаче code-попытки";
     if (current.review.state === "available" && current.review.review_id !== null && current.review.outcome !== null && current.review.candidate_current === true && current.review.applicable === true) return taskReviewLabel(current.review, true, true);
-    if (current.artifact_kind === "code" && current.artifact.state === "received") return current.code_package?.verification?.state === "not_produced" ? "Сохранён отчёт code-попытки" : "Code-пакет получен";
+    if (current.artifact_kind === "code" && current.artifact.state === "received") return "Code-пакет получен";
     if (current.artifact.state === "received" && current.artifact.receipt) return "Получение файла записано";
     if (current.artifact.state === "error") return "Файл не подтверждён";
     return executionPhaseLabels[current.continuation.phase] ?? "Фаза исполнения неизвестна";
