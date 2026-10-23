@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
-import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, sourceQualityProfileResponseSchema, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
+import { missionSchema, personalOsHostContract, taskListSourceSchema, sourceInputListSchema, sourceInputDetailResponseSchema, researchContentSchema, taskChatSchema, sourceTaskActivitySchema, sourceQualityProfileResponseSchema, qualityReferenceAssetSchema, type QualityReferenceSelection, type QualityReferenceResult, type SubmitInput, type SubmissionResult, type InputArtifactResult, type TaskResult } from "./contract.js";
 
 const BASE_URL = "http://127.0.0.1:7317";
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -79,6 +79,54 @@ async function read<S extends z.ZodType>(path: string, schema: S, signal: AbortS
 
 async function readInput(noteId: string, signal: AbortSignal) {
   return read("/api/inbox/" + encodeURIComponent(noteId), sourceInputDetailResponseSchema.refine(value => value.item.id === noteId && value.item.results.items.every(result => result.note_id === noteId)), signal, 512 * 1024);
+}
+
+function referenceImageType(bytes: Uint8Array): "image/png" | "image/jpeg" | null {
+  const dimensions = (width: number, height: number) => width > 0 && width <= 16384 && height > 0 && height <= 16384 && width * height <= 16000000;
+  const short = (offset: number) => (bytes[offset] ?? 0) * 256 + (bytes[offset + 1] ?? 0);
+  const integer = (offset: number) => (bytes[offset] ?? 0) * 16777216 + (bytes[offset + 1] ?? 0) * 65536 + (bytes[offset + 2] ?? 0) * 256 + (bytes[offset + 3] ?? 0);
+  if (bytes.length >= 33 && [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82].every((value, index) => bytes[index] === value)
+    && dimensions(integer(16), integer(20))) return "image/png";
+  if (!(bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 && bytes[bytes.length - 2] === 255 && bytes[bytes.length - 1] === 217)) return null;
+  let offset = 2;
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 255) return null;
+    while (offset < bytes.length && bytes[offset] === 255) offset += 1;
+    if (offset >= bytes.length) return null;
+    const marker = bytes[offset++];
+    if (marker === 0 || marker === 217 || marker === 218) return null;
+    if (marker === 1 || marker >= 208 && marker <= 216) continue;
+    if (offset + 2 > bytes.length) return null;
+    const length = short(offset);
+    if (length < 2 || offset + length > bytes.length) return null;
+    if (marker === 192 || marker === 193 || marker === 194) return length >= 8 && dimensions(short(offset + 5), short(offset + 3)) ? "image/jpeg" : null;
+    offset += length;
+  }
+  return null;
+}
+
+async function readQualityReference(input: QualityReferenceSelection, signal: AbortSignal): Promise<QualityReferenceResult> {
+  const parameters = new URLSearchParams({ mission_id: input.mission_id, profile_id: input.profile_id, version: String(input.version), profile_hash: input.profile_hash,
+    dimension_id: input.dimension_id, kind: input.kind, sample_id: input.sample_id });
+  const response = await read("/api/quality/reference?" + parameters.toString(), qualityReferenceAssetSchema.refine(value =>
+    value.selection.mission_id === input.mission_id && value.selection.profile_id === input.profile_id && value.selection.version === input.version
+    && value.selection.profile_hash === input.profile_hash && value.selection.dimension_id === input.dimension_id
+    && value.selection.kind === input.kind && value.selection.sample_id === input.sample_id), signal, 3 * 1024 * 1024);
+  if (response.state !== "available" || response.data.state !== "available") return response;
+  try {
+    const asset = response.data;
+    if (!asset.content || asset.size === null || asset.media_type === null) throw new Error("invalid_response");
+    const bytes = Buffer.from(asset.content.data, "base64");
+    if (bytes.toString("base64") !== asset.content.data || bytes.length !== asset.size
+      || createHash("sha256").update(bytes).digest("hex") !== asset.declared_sha256) throw new Error("invalid_response");
+    if (asset.media_type === "text/plain; charset=utf-8") {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(text)) throw new Error("invalid_response");
+    } else if (referenceImageType(bytes) !== asset.media_type) throw new Error("invalid_response");
+    return response;
+  } catch {
+    return { state: "unavailable", observedAt: new Date().toISOString(), reason: "invalid_response" };
+  }
 }
 
 async function readVerifiedResearch(path: string, artifact: { aid: string; size: number; sha256: string }, signal: AbortSignal): Promise<ReadResult<z.infer<typeof researchContentSchema>>> {
@@ -172,8 +220,8 @@ async function submit(input: SubmitInput, signal: AbortSignal): Promise<Submissi
     const target = input.target;
     const path = target.scope === "personal" ? "/api/inbox" : "/api/missions/" + encodeURIComponent(target.missionId) + "/input";
     const payload = target.scope === "personal"
-      ? { project_id: null, text: input.text, input_kind: "text" }
-      : { text: input.text, input_kind: "text", expected_version: target.expectedMissionVersion };
+      ? { project_id: null, text: input.text, input_kind: input.inputKind ?? "text" }
+      : { text: input.text, input_kind: input.inputKind ?? "text", expected_version: target.expectedMissionVersion };
     const response = await fetch(BASE_URL + path, {
       method: "POST",
       redirect: "error",
@@ -230,6 +278,7 @@ export default experimental_defineHostEntry({
       const path = "/api/quality/profile-versions/" + encodeURIComponent(input.profileId) + "?version=" + input.version + "&hash=" + input.profileHash;
       return read(path, sourceQualityProfileResponseSchema.refine(value => value.state === "available" ? value.profile !== null && value.profile.mission_id === input.missionId && value.profile.profile_id === input.profileId && value.profile.version === input.version && value.profile.profile_hash === input.profileHash : value.profile === null), context.signal, 128 * 1024);
     },
+    getQualityReference(input, context) { return readQualityReference(input, context.signal); },
     getTaskChat(input, context) {
       return read("/api/task-chat-links?task_id=" + encodeURIComponent(input.taskId), taskChatSchema.refine(value => value.task_id === input.taskId), context.signal, 65536);
     },

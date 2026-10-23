@@ -137,6 +137,25 @@ export const inputArtifactSchema = z.object({
 });
 
 export const qualityProfileInputSchema = z.object({ missionId: missionIdSchema, profileId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/), version: z.number().int().min(1).max(999999999), profileHash: hashSchema }).strict();
+export const qualityReferenceSelectionSchema = z.object({
+  mission_id: missionIdSchema, profile_id: qualityProfileInputSchema.shape.profileId,
+  version: z.number().int().min(1).max(2147483647), profile_hash: hashSchema,
+  dimension_id: z.enum(["accuracy", "ux", "visual", "resilience", "delivery"]),
+  kind: z.enum(["example", "counterexample"]), sample_id: qualityProfileInputSchema.shape.profileId,
+}).strict();
+export const qualityReferenceAssetSchema = z.object({
+  schema_version: z.literal(1), scope: z.literal("quality_reference_asset"), state: z.enum(["available", "unavailable", "error"]),
+  selection: qualityReferenceSelectionSchema, sample_definition_hash: hashSchema.nullable(),
+  declared_sha256: hashSchema.nullable(), observed_sha256: hashSchema.nullable(), size: z.number().int().min(1).max(2 * 1024 * 1024).nullable(),
+  media_type: z.enum(["image/jpeg", "image/png", "text/plain; charset=utf-8"]).nullable(),
+  content: z.object({ encoding: z.literal("base64"), data: z.string().max(4 * Math.ceil(2 * 1024 * 1024 / 3)) }).strict().nullable(),
+  context_current: nullableFlag, profile_current: nullableFlag, error_code: z.string().regex(/^[a-z][a-z0-9_]{0,99}$/).nullable(),
+  owner_confirmation: z.literal("not_assessed"), calibration: z.literal("not_assessed"),
+}).strict().refine(value => value.state === "available"
+  ? value.sample_definition_hash !== null && value.declared_sha256 !== null && value.observed_sha256 === value.declared_sha256
+    && value.size !== null && value.media_type !== null && value.content !== null && value.error_code === null
+    && (value.media_type !== "text/plain; charset=utf-8" || value.size <= 256 * 1024)
+  : value.content === null && value.error_code !== null);
 const profileStateSchema = z.object({ id: qualityProfileInputSchema.shape.profileId, description: boundedText(1000) });
 const profileCriterionSchema = z.object({ id: qualityProfileInputSchema.shape.profileId, description: boundedText(2000), state_ids: z.array(qualityProfileInputSchema.shape.profileId).max(12), evidence_required: boundedText(2000) });
 const publicProfileSampleSchema = z.object({ id: qualityProfileInputSchema.shape.profileId, description: boundedText(2000), reference_state: z.literal("reported") });
@@ -178,7 +197,7 @@ export const domainDeliverySchema = z.object({
   item: z.object({ delivery_id: nativeDeliveryIdSchema, delivery_hash: hashSchema, review_run_id: nativeDeliveryIdSchema, delegation_id: nativeDeliveryIdSchema,
     revision: z.number().int().positive(), attempt_id: nativeDeliveryIdSchema, input_hash: hashSchema, context_hash: hashSchema.nullable(), request_hash: hashSchema,
     profile: z.object({ id: nativeDeliveryIdSchema, version: z.number().int().positive(), hash: hashSchema }), artifact_refs: z.array(nativeDeliveryArtifactSchema).min(1).max(20), artifact_set_hash: hashSchema,
-    scope: z.literal("bounded_packet_research"), state: z.enum(["passed", "blocked", "failed"]), outcome: z.enum(["pass", "fail", "unknown", "not_run"]),
+    scope: z.enum(["bounded_packet_research", "bounded_code_source_review"]), state: z.enum(["passed", "blocked", "failed"]), outcome: z.enum(["pass", "fail", "unknown", "not_run"]),
     acceptance: z.enum(["pending", "accepted", "historical"]), current: z.boolean(), created_at: timestampSchema,
     gate_blockers: z.array(z.enum(["calibration_not_pinned", "review_not_passed", "binding_changed", "evidence_changed", "review_failed", "gate_conditions_unconfirmed"])).max(6).nullable().optional() }).nullable(),
   currentness: z.enum(["current", "historical", "unknown"]), snapshot_current: nullableFlag, context_current: nullableFlag, total_count: z.number().int().nonnegative().nullable(),
@@ -288,6 +307,7 @@ export const submitInputSchema = lookupInputSchema.extend({
     z.object({ scope: z.literal("personal") }).strict(),
     z.object({ scope: z.literal("mission"), missionId: missionIdSchema, expectedMissionVersion: z.number().int().positive() }).strict(),
   ]),
+  inputKind: z.enum(["text", "voice"]).optional(),
 }).strict();
 
 const submissionIdentity = {
@@ -327,6 +347,7 @@ export const personalOsHostContract = defineRpcContract({
   getInput: { input: getInputInputSchema, output: readResultSchema(inputDetailResponseSchema) },
   getInputArtifact: { input: inputArtifactInputSchema, output: readResultSchema(inputArtifactSchema) },
   getQualityProfile: { input: qualityProfileInputSchema, output: readResultSchema(qualityProfileResponseSchema) },
+  getQualityReference: { input: qualityReferenceSelectionSchema, output: readResultSchema(qualityReferenceAssetSchema) },
   getTaskChat: { input: taskChatInputSchema, output: readResultSchema(taskChatSchema) },
   getTaskActivity: { input: taskChatInputSchema, output: readResultSchema(taskActivitySchema) },
   getMissionActivity: { input: missionInputSchema, output: readResultSchema(taskActivitySchema) },
@@ -344,6 +365,8 @@ export type PersonalOsContract = typeof personalOsContract;
 export type CandidateReadiness = z.infer<typeof candidateReadinessSchema>;
 export type DomainDeliveryRead = z.infer<typeof domainDeliverySchema>;
 export type QualityProfileResult = z.infer<typeof personalOsContract.getQualityProfile.output>;
+export type QualityReferenceResult = z.infer<typeof personalOsContract.getQualityReference.output>;
+export type QualityReferenceSelection = z.infer<typeof qualityReferenceSelectionSchema>;
 export type Mission = z.infer<typeof missionSchema>;
 export type Task = z.infer<typeof publicTaskSchema>;
 export type TaskList = z.infer<typeof taskListSchema>;

@@ -24,8 +24,15 @@ must use its configured access boundary; this plugin does not add authentication
 
 ## Use
 
-Open **Personal OS** in the BB sidebar, choose a goal, then open a task card.
-The same operations are available through typed plugin RPC and CLI:
+Open **Personal OS** in the BB sidebar. If exactly one saved goal is active, the
+default route opens its task board. Otherwise it shows the goal chooser. The explicit
+**Цели** route keeps that chooser open. This navigation does not bind personal input
+to a goal. The composer starts with **Личное входящее**; **К текущей цели** is an explicit
+choice that pins the displayed goal version. Existing drafts keep their own target.
+**Личные поручения** opens the single instruction list in personal scope, including
+from a goal board. **Эта цель** explicitly selects goal-linked instructions in that
+same list; it does not create another feed or change the composer target.
+Read and save operations are also available through typed plugin RPC and CLI:
 
 ```sh
 bb personal-os missions
@@ -138,11 +145,13 @@ private resolved profiles are not copied or independently revalidated here. A hi
 contradictory or omitted history stays unavailable; known absence is not_assessed.
 
 `passed`, the outcome and native `acceptance` are separate fields. Native acceptance
-is an acknowledgement for that bounded research delivery, not task completion,
+is an acknowledgement for that bounded native delivery, not task completion,
 mission acceptance, or an owner quality rating. `files:not_rechecked` describes Delivery metadata; the separate exact artifact
 read verifies bytes without rewriting that metadata. Legacy `execution.quality_gate:not_run` and
 immutable result manifests are unchanged. An old missing input hash leaves Delivery
-unknown without hiding the existing task or received file.
+unknown without hiding the existing task or received file. The shared Delivery DTO also
+recognizes `bounded_code_source_review`. This does not add a code-file reader:
+`getTaskResult` and its page still accept only the verified research result.
 
 `getQualityProfile({missionId,profileId,version,profileHash})` and the CLI below use
 only the fixed exact-version owner route. The host checks all four identities and
@@ -153,7 +162,19 @@ verify its declared examples.
 
 ```sh
 bb personal-os quality-profile <mission_id> <profile_id> <version> <profile_hash>
+bb personal-os quality-reference <mission_id> <profile_id> <version> <profile_hash> <dimension_id> <example|counterexample> <sample_id>
 ```
+
+The profile page offers an explicit **Просмотреть материал** action.
+`getQualityReference` uses the exact mission/profile/version/hash, dimension, sample
+kind and sample ID. It reads only an owner-approved local reference with a pinned
+SHA-256. The host and browser check the selected identity, decoded size and hash
+before showing plain UTF-8 text or a PNG/JPEG preview. Images are limited to 2 MiB,
+text to 256 KiB, and the response envelope to 3 MiB. Missing hashes, unsupported
+sources, changed bytes or unavailable files keep the content hidden. No latest
+profile or other sample substitutes for the selected one. Previewing bytes does
+not confirm the sample, calibrate a reviewer or adopt the profile; historical and
+unknown currentness remain explicit. Private source locators are not returned.
 
 These are source-level read capabilities. Deployment, build and manual UI results
 must be recorded separately; this section does not establish a live pass.
@@ -201,12 +222,14 @@ No new chat, message, provider resume or model execution is added.
 `submitInput` accepts a UUID, plain text up to 20,000 UTF-16 code units, and one
 explicit target: personal inbox, or a goal ID with the exact version read by the
 user. Personal is the default UI scope. The plugin does not silently adopt a
-newer goal version. It fixes `input_kind` to `text`.
+newer goal version. Optional `inputKind` is `text` or `voice`; omitted values retain
+the existing `text` behavior. A dictation draft explicitly selects `voice`. This is
+an input-origin label, not an audio upload or an execution request.
 
 Before contacting a host, the server transactionally stores the exact command,
 its hash and selected host in its plugin SQLite command ledger. This ledger is
 transport bookkeeping, not a second task owner or dispatch queue. A retry cannot
-change the UUID, text, scope, goal version or host. A changed host setting blocks
+change the UUID, text, input kind, scope, goal version or host. A changed host setting blocks
 an unresolved command. Confirmed saved receipts replay locally without network.
 If no host is configured, a terminal `not_sent` ledger entry prevents an older
 concurrent call from later sending that UUID. After configuring a host, a new
@@ -240,6 +263,23 @@ its unsent text separately in session storage. Restoration is offered only when
 the shared composer is empty and has no pending request. That backup survives a
 reload, but not closing the tab.
 
+## Voice drafting
+
+**Диктовать** starts browser speech recognition only after a click, when the browser
+exposes `SpeechRecognition` or `webkitSpeechRecognition` in a secure context.
+Microphone permission and device availability belong to that browser. The microphone
+is on the browser device; its speech service may process audio externally. Personal OS
+receives the resulting text, not audio. No local-only audio processing is promised.
+
+Final recognized fragments join the protected draft. Interim words are visibly unsaved.
+Stop dictation, check the text, then press **Добавить** separately; dictation never submits
+an instruction. Sending and target changes are blocked during capture. A route/target
+change cancels capture. Unconfirmed fragment writes remain visible for manual recovery;
+they are not silently treated as saved. Reload never resumes capture or submission.
+Denied permission, unsupported recognition and network failure keep text entry and system
+dictation as alternatives. Actual microphone capture and speech recognition in external
+Chrome or on a phone remain unverified; source support is not a live voice pass.
+
 ## Boundaries
 
 Reads use only GET `/api/missions`, `/api/missions/<mission_id>` and
@@ -248,7 +288,8 @@ exact note/result artifact routes, and `/api/task-chat-links?task_id=<task_id>`.
 Task activity uses only `/api/task-execution?task_id=<task_id>` or the fixed
 mission batch query, and `/api/task-execution/<binding_id>/artifact?task_id=<task_id>`.
 Exact profiles use `/api/quality/profile-versions/<profile_id>?version=<version>&hash=<sha256>`
-with a 128 KiB reply limit.
+with a 128 KiB reply limit. Exact sample reads use only `/api/quality/reference`
+with the seven validated selection fields and a 3 MiB reply limit.
 Responses are limited to 2 MiB for goals/tasks, 1 MiB for inbox lists, 512 KiB for
 instruction details and exact artifact bytes, 1 MiB for task activity and 64 KiB for chat bindings;
 100 goals and 500 tasks; requests time out after five seconds. IDs and responses
@@ -259,6 +300,9 @@ The host adds the local client header; no credential is copied into the browser.
 
 `/api/control` is deliberately excluded because it records skill observations.
 The plugin has no task/status write, dispatch, model or chat-creation action.
+Skill-package bytes, manifests, problem links and reported evaluations remain owned
+by Personal OS. This plugin does not refresh that catalog, capture packages or
+promote a skill; it does not keep a second skill library.
 Decision answers remain outside this slice. It delegates explicit Desktop
 navigation to the existing opener rather than adding a second opener. The command ledger is initialized during plugin loading. Outcome reads
 do not initialize storage. There is no background poller or automatic resend.

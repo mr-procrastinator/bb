@@ -5,6 +5,8 @@ import { definePluginApp, experimental_usePluginId, useBbNavigate, useRpc } from
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { z } from "zod";
+import { VoiceInput } from "./VoiceInput.js";
+import { QualityReferenceViewer, type QualityReferenceSelection } from "./QualityReferenceViewer.js";
 import { qualityProfileInputSchema, submitInputSchema, type CandidateReadiness, type DomainDeliveryRead, type InputArtifactResult, type InputDetail, type InputDetailResult, type InputItem, type InputsResult, type Mission, type MissionActivityResult, type MissionResult, type MissionsResult, type OpenTaskChatResult, type PartialResult, type PersonalOsContract, type QualityProfileResult, type SubmitInput, type SubmissionLookupResult, type Task, type TaskActivityItem, type TaskActivityResult, type TaskChatResult, type TaskExecutionBinding, type TaskResult, type TasksResult } from "./contract.js";
 
 const PANEL_PATH = "personal-os";
@@ -25,10 +27,11 @@ const unavailableLabels = {
 const inputDraftSchema = z.object({
   version: z.literal(1),
   text: z.string().max(20000),
+  inputKind: z.enum(["text", "voice"]).optional(),
   target: submitInputSchema.shape.target,
   targetLabel: z.string().max(4000),
   pending: submitInputSchema.nullable(),
-}).strict().refine(value => value.pending === null || value.pending.text === value.text && JSON.stringify(value.pending.target) === JSON.stringify(value.target));
+}).strict().refine(value => value.pending === null || value.pending.text === value.text && JSON.stringify(value.pending.target) === JSON.stringify(value.target) && (value.pending.inputKind === undefined || value.pending.inputKind === value.inputKind));
 type InputDraft = z.infer<typeof inputDraftSchema>;
 const emptyInputDraft = (): InputDraft => ({ version: 1, text: "", target: { scope: "personal" }, targetLabel: "", pending: null });
 
@@ -53,7 +56,7 @@ function readInputBackups(storageKey: string): InputDraft[] {
   return parsed.data;
 }
 
-function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }: { missionId: string | null; onSaved: () => void; onStatus: (label: string) => void; openRequest: number; composerId: string }) {
+function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId, visible }: { missionId: string | null; onSaved: () => void; onStatus: (label: string) => void; openRequest: number; composerId: string; visible: boolean }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const pluginId = experimental_usePluginId();
@@ -66,6 +69,8 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }
   const [storageError, setStorageError] = useState(initial.error);
   const [notice, setNotice] = useState(initial.draft.pending ? "Исход прежней отправки не подтверждён. Проверьте отправку." : "");
   const [busy, setBusy] = useState(false);
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
   const [mission, setMission] = useState<Mission | null>(null);
   const [missionRevision, setMissionRevision] = useState(0);
@@ -80,6 +85,7 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }
   const generation = useRef(0);
   const writeQueue = useRef<Promise<boolean>>(Promise.resolve(true));
   const busyRef = useRef(false);
+  const voiceActiveRef = useRef(false);
   const mounted = useRef(true);
   const composerRef = useRef<HTMLDetailsElement | null>(null);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -166,7 +172,7 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }
     return operation;
   };
   const chooseTarget = (target: SubmitInput["target"], targetLabel: string) => {
-    if (busyRef.current || draftRef.current.pending || initial.corrupt) return;
+    if (busyRef.current || voiceActiveRef.current || draftRef.current.pending || initial.corrupt) return;
     void persist({ ...draftRef.current, target, targetLabel });
     setNotice("");
   };
@@ -198,12 +204,13 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (voiceActiveRef.current) { setNotice("Остановите диктовку и проверьте текст перед добавлением поручения."); return; }
     if (busyRef.current || initial.corrupt || conflict || !lockAvailable) return;
     const current = draftRef.current;
     let request = current.pending;
     const retry = request !== null;
     if (!request) {
-      const parsed = submitInputSchema.safeParse({ requestId: crypto.randomUUID(), text: current.text, target: current.target });
+      const parsed = submitInputSchema.safeParse({ requestId: crypto.randomUUID(), text: current.text, ...(current.inputKind === undefined ? {} : { inputKind: current.inputKind }), target: current.target });
       if (!parsed.success) { setNotice("Введите поручение длиной до 20 000 символов."); return; }
       request = parsed.data;
     }
@@ -223,7 +230,16 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }
     }
   };
   const locked = busy || draft.pending !== null || initial.corrupt || conflict || !lockAvailable;
-  const composerLabel = busy ? "Отправка сохраняется…" : draft.pending ? "Проверить отправку" : storageError || initial.corrupt || conflict || !lockAvailable ? "Ввод требует внимания" : draft.text.trim() ? "Продолжить черновик" : backup ? "Сохранённые черновики" : "+ Поручение";
+  const voiceTarget = JSON.stringify(draft.target);
+  const voiceGeneration = generation.current;
+  const appendVoice = (fragment: string) => {
+    const current = draftRef.current;
+    if (!mounted.current || busyRef.current || current.pending || initial.corrupt || conflict || !visible || !composerOpen || generation.current !== voiceGeneration || JSON.stringify(current.target) !== voiceTarget) return Promise.resolve(false);
+    const text = current.text + (current.text && !/\s$/.test(current.text) ? " " : "") + fragment;
+    if (text.length > 20000) { setNotice("Достигнут лимит 20 000 символов. Последний фрагмент не добавлен; сохраните его отдельно."); return Promise.resolve(false); }
+    return persist({ ...current, text, inputKind: "voice" });
+  };
+  const composerLabel = voiceActive ? "Идёт диктовка" : busy ? "Отправка сохраняется…" : draft.pending ? "Проверить отправку" : storageError || initial.corrupt || conflict || !lockAvailable ? "Ввод требует внимания" : draft.text.trim() ? "Продолжить черновик" : backup ? "Сохранённые черновики" : "+ Поручение";
   useEffect(() => { onStatus(composerLabel); }, [composerLabel, onStatus]);
   useEffect(() => {
     const panel = composerRef.current;
@@ -238,19 +254,20 @@ function InputComposer({ missionId, onSaved, onStatus, openRequest, composerId }
   const selectedMission = draft.target.scope === "mission";
   const sameMission = draft.target.scope === "mission" && availableMission?.id === draft.target.missionId;
   const staleTarget = sameMission && draft.target.scope === "mission" && availableMission?.version !== draft.target.expectedMissionVersion;
-  return <details ref={composerRef} id={composerId} className="mx-auto w-full max-w-5xl rounded-lg border border-border bg-card">
+  return <details ref={composerRef} id={composerId} onToggle={event => setComposerOpen(event.currentTarget.open)} className="mx-auto w-full max-w-5xl rounded-lg border border-border bg-card">
     <summary className="cursor-pointer px-4 py-3 text-sm font-medium">{composerLabel}</summary>
     <form onSubmit={submit} className="space-y-3 border-t border-border p-4" aria-label="Новое поручение">
       <label className="sr-only" htmlFor={fieldId}>Что нужно сделать?</label>
       <Textarea id={fieldId} value={draft.text} maxLength={20000} rows={2} placeholder="Что нужно сделать?" disabled={locked} onChange={event => { void persist({ ...draftRef.current, text: event.target.value }); setNotice(""); }} />
+      <VoiceInput disabled={locked || !!storageError || !visible || !composerOpen} contextKey={(missionId ?? "personal") + ":" + voiceTarget + ":" + voiceGeneration} onFinal={appendVoice} onActiveChange={active => { voiceActiveRef.current = active; if (mounted.current) setVoiceActive(active); }} />
       <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2" role="group" aria-label="Куда добавить поручение">
-        <Button type="button" variant={!selectedMission ? "secondary" : "ghost"} size="sm" aria-pressed={!selectedMission} disabled={locked} onClick={() => chooseTarget({ scope: "personal" }, "")}>Личное входящее</Button>
-        <Button type="button" variant={sameMission ? "secondary" : "ghost"} size="sm" aria-pressed={sameMission} disabled={locked || !availableMission} onClick={() => { if (availableMission) chooseTarget({ scope: "mission", missionId: availableMission.id, expectedMissionVersion: availableMission.version }, availableMission.title); }}>{staleTarget ? "Обновить привязку" : "К текущей цели"}</Button>
-      </div><Button type="submit" size="sm" disabled={busy || initial.corrupt || conflict || !lockAvailable || !draft.pending && (!draft.text.trim() || staleTarget)}>{busy ? "Сохраняем…" : draft.pending ? "Проверить отправку" : "Добавить"}</Button></div>
+        <Button type="button" variant={!selectedMission ? "secondary" : "ghost"} size="sm" aria-pressed={!selectedMission} disabled={locked || voiceActive} onClick={() => chooseTarget({ scope: "personal" }, "")}>Личное входящее</Button>
+        <Button type="button" variant={sameMission ? "secondary" : "ghost"} size="sm" aria-pressed={sameMission} disabled={locked || voiceActive || !availableMission} onClick={() => { if (availableMission) chooseTarget({ scope: "mission", missionId: availableMission.id, expectedMissionVersion: availableMission.version }, availableMission.title); }}>{staleTarget ? "Обновить привязку" : "К текущей цели"}</Button>
+      </div><Button type="submit" size="sm" disabled={busy || voiceActive || initial.corrupt || conflict || !lockAvailable || !draft.pending && (!draft.text.trim() || staleTarget)}>{busy ? "Сохраняем…" : draft.pending ? "Проверить отправку" : "Добавить"}</Button></div>
       {selectedMission && <p className="text-xs text-muted-foreground">К цели: {draft.targetLabel || "ранее выбранная цель"}{staleTarget ? " · условия изменились" : ""}</p>}
       {storageError && <p className="text-xs text-destructive-text" role="alert">{storageError}</p>}
       {!lockAvailable && <p className="text-xs text-destructive-text" role="alert">Браузер не поддерживает безопасную запись между вкладками. Добавление поручений недоступно.</p>}
-      {backup && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>Отдельных черновиков в этой вкладке: {backups.length}.</span><Button type="button" variant="ghost" size="sm" disabled={locked || !!draft.text} onClick={async () => {
+      {backup && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>Отдельных черновиков в этой вкладке: {backups.length}.</span><Button type="button" variant="ghost" size="sm" disabled={locked || voiceActive || !!draft.text} onClick={async () => {
         if (await persist(backup)) {
           try {
             const remaining = readInputBackups(backupKey).filter(item => JSON.stringify(item) !== JSON.stringify(backup));
@@ -275,6 +292,31 @@ function ReadTime({ value }: { value: string }) {
 }
 
 const inputStateLabels: Record<InputItem["state"], string> = { new: "Ждёт разбора", reviewing: "На разборе", planned: "План сохранён", done: "Отмечено готовым" };
+function stoppedTriageLabel(note: InputItem): string | null {
+  if (note.triage.state !== "available" || !note.triage.run_id) return null;
+  return note.triage.run_state === "failed" ? "Разбор остановлен" : note.triage.run_state === "superseded" ? "План устарел" : null;
+}
+function inputStateLabel(note: InputItem): string {
+  const stopped = stoppedTriageLabel(note);
+  return stopped ? note.state === "new" || note.state === "done" ? inputStateLabels[note.state] + " · " + stopped : stopped : inputStateLabels[note.state];
+}
+function stoppedTriageReason(note: InputItem): string {
+  const reasons: Record<string, string> = {
+    provider_failed: "Исполнитель завершил разбор с ошибкой.",
+    provider_timeout: "Истекло время разбора.",
+    provider_not_found: "Исполнитель разбора не найден.",
+    provider_not_executable: "Исполнитель разбора недоступен для запуска.",
+    provider_start_failed: "Исполнитель разбора не запустился.",
+    invalid_triage: "Полученный разбор не прошёл проверку формата.",
+    interrupted: "Разбор был прерван.",
+    director_control_stopped: "Разбор остановлен управляющим процессом.",
+    director_input_incomplete: "Не удалось подготовить полный ввод для разбора.",
+    mission_context_changed: "Условия цели изменились во время разбора.",
+    note_changed: "Поручение изменилось во время разбора.",
+  };
+  const code = note.triage.error_code;
+  return code && Object.prototype.hasOwnProperty.call(reasons, code) ? reasons[code] : "Подробная причина недоступна.";
+}
 const inputTitle = (note: InputItem) => {
   const first = note.text.trim().split(/\r?\n/)[0] || "Поручение";
   return first.length > 140 ? first.slice(0, 137) + "…" : first;
@@ -333,14 +375,15 @@ function ReportBody({ text }: { text: string }) {
   return <div className="min-w-0 space-y-2 text-sm leading-relaxed"><div id={bodyId} className={clamped ? "max-h-48 overflow-hidden" : undefined}><ReactMarkdown skipHtml allowedElements={reportElements} unwrapDisallowed remarkPlugins={reportPlugins} components={clamped ? reportPreviewComponents : reportComponents} urlTransform={reportUrlTransform}>{text}</ReactMarkdown></div>{text.length > 600 && <Button type="button" variant="ghost" size="sm" aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded(value => !value)}>{expanded ? "Свернуть" : "Читать полностью"}</Button>}</div>;
 }
 
-function InputList({ missionId, refreshRevision }: { missionId: string | null; refreshRevision: number }) {
+function InputList({ missionId, refreshRevision, openPersonalRequest }: { missionId: string | null; refreshRevision: number; openPersonalRequest: number }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
-  const [scope, setScope] = useState<"personal" | "mission">(missionId ? "mission" : "personal");
+  const [scope, setScope] = useState<"personal" | "mission">("personal");
   const [result, setResult] = useState<InputsResult | null>(null);
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
   const [expanded, setExpanded] = useState(false);
+  useEffect(() => { if (openPersonalRequest > 0) setScope("personal"); }, [openPersonalRequest]);
   useEffect(() => {
     let active = true;
     setResult(null);
@@ -357,14 +400,15 @@ function InputList({ missionId, refreshRevision }: { missionId: string | null; r
     <header className="flex flex-wrap items-center justify-between gap-2"><h2 className="sr-only">Мои поручения</h2><div className="flex flex-wrap gap-1"><Button type="button" variant={scope === "personal" ? "secondary" : "ghost"} size="sm" aria-pressed={scope === "personal"} onClick={() => setScope("personal")}>Личные</Button>{missionId && <Button type="button" variant={scope === "mission" ? "secondary" : "ghost"} size="sm" aria-pressed={scope === "mission"} onClick={() => setScope("mission")}>Эта цель</Button>}<Button type="button" variant="ghost" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>
     {result === null && !failed && <p className="text-xs text-muted-foreground" role="status">Читаем поручения…</p>}
     {failed || result?.state === "unavailable" || result?.state === "available" && !items ? <p className="text-sm text-muted-foreground" role="status">Поручения прочитать не удалось. Их количество и состояние неизвестны.</p> : null}
-    {items && data && <><div className="grid gap-2 md:grid-cols-3">{(expanded ? items : items.slice(0, 3)).map(note => <button type="button" key={note.id} onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + note.id })} className="flex min-w-0 cursor-pointer flex-col items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="line-clamp-2 break-words text-sm font-medium">{inputTitle(note)}</span><span className="mt-auto text-xs text-muted-foreground">{inputStateLabels[note.state]}{partialStatus(note) ? " · " + partialStatus(note) : ""}</span></button>)}</div>{items.length === 0 && <p className="text-sm text-muted-foreground">{scope === "mission" ? "Поручений этой цели нет." : "Личных поручений нет."}</p>}{(items.length > 3 || data.truncated) && <Button type="button" variant="ghost" size="sm" onClick={() => setExpanded(value => !value)}>{expanded ? "Свернуть" : "Все поручения · " + data.total_count}</Button>}{data.truncated && <p className="text-xs text-muted-foreground">Показаны последние {expanded ? items.length : Math.min(3, items.length)} из {data.total_count}. Список неполон.</p>}</>}
+    {items && data && <><div className="grid gap-2 md:grid-cols-3">{(expanded ? items : items.slice(0, 3)).map(note => <button type="button" key={note.id} onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "input/" + note.id })} className="flex min-w-0 cursor-pointer flex-col items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="line-clamp-2 break-words text-sm font-medium">{inputTitle(note)}</span><span className="mt-auto text-xs text-muted-foreground">{inputStateLabel(note)}{partialStatus(note) ? " · " + partialStatus(note) : ""}</span></button>)}</div>{items.length === 0 && <p className="text-sm text-muted-foreground">{scope === "mission" ? "Поручений этой цели нет." : "Личных поручений нет."}</p>}{(items.length > 3 || data.truncated) && <Button type="button" variant="ghost" size="sm" onClick={() => setExpanded(value => !value)}>{expanded ? "Свернуть" : "Все поручения · " + data.total_count}</Button>}{data.truncated && <p className="text-xs text-muted-foreground">Показаны последние {expanded ? items.length : Math.min(3, items.length)} из {data.total_count}. Список неполон.</p>}</>}
   </section>;
 }
 
 function SavedPlan({ note }: { note: InputDetail }) {
   const triage = note.triage;
   const plan = triage.state === "available" ? triage.plan : null;
-  return <section className="space-y-3" aria-label="Сохранённый план"><h2 className="text-base font-semibold">План директора</h2>{plan ? <>
+  const stopped = stoppedTriageLabel(note);
+  return <section className="space-y-3" aria-label="Сохранённый план"><h2 className="text-base font-semibold">План директора</h2>{stopped && <div className="space-y-1 text-sm" role="status"><p className="font-medium">{stopped}</p><p className="text-muted-foreground">{stoppedTriageReason(note)} {triage.run_state === "failed" ? "Повторный запуск из этого представления недоступен." : "Сохранённый план остаётся в истории."}</p></div>}{plan ? <>
     {triage.note_current !== true && <p className="text-xs text-muted-foreground">{triage.note_current === false ? "План относится к прежнему поручению." : "Связь плана с текущим поручением не подтверждена."}</p>}
     <PlainText text={plan.summary} />
     {plan.next_actions.length > 0 && <ol className="list-decimal space-y-3 pl-5 text-sm">{plan.next_actions.map((action, index) => <li key={index}><p className="break-words font-medium">{action.title}</p>{action.reason.trim() !== action.title.trim() && <p className="break-words text-muted-foreground">{action.reason}</p>}</li>)}</ol>}
@@ -373,7 +417,7 @@ function SavedPlan({ note }: { note: InputDetail }) {
     {plan.questions.length > 0 && <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">Вопросы · {plan.questions.length}</summary><ul className="list-disc space-y-2 pl-5 pt-3">{plan.questions.map((text, index) => <li key={index} className="whitespace-pre-wrap break-words">{text}</li>)}</ul></details>}
     <p className="text-xs text-muted-foreground">Это план. Его запись не подтверждает выполнение.</p>
     {triage.mission_version_current !== true && note.mission_id && <p className="text-xs text-muted-foreground">{triage.mission_version_current === false ? "Версия цели после записи плана изменилась." : "Совпадение с текущей версией цели не подтверждено."}</p>}
-  </> : <p className="text-sm text-muted-foreground">{triage.state === "empty" ? "План пока не сохранён." : "Сохранённый план прочитать не удалось."}</p>}</section>;
+  </> : !stopped && <p className="text-sm text-muted-foreground">{triage.state === "empty" ? "План пока не сохранён." : "Сохранённый план прочитать не удалось."}</p>}</section>;
 }
 
 function fileReviewText(review: PartialResult["review"], current: boolean): string {
@@ -405,11 +449,11 @@ function InputPage({ noteId }: { noteId: string }) {
   const note = result?.state === "available" && result.data.item.id === noteId ? result.data.item : null;
   const partials = note?.results.state === "available" && note.results.items.every(item => item.note_id === noteId) && (note.results.items.length > 0 || note.results.total_count === 0 && !note.results.truncated) ? note.results.items : null;
   const latest = partials?.[0] ?? null;
-  return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex items-center justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH)}>← Мои поручения</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
+  return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex items-center justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "goals" })}>← Мои поручения</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
     {result === null && !failed && <p className="text-sm text-muted-foreground" role="status">Читаем поручение…</p>}{failed || result !== null && !note ? <p className="text-sm text-muted-foreground" role="status">Поручение прочитать не удалось. Его состояние неизвестно.</p> : null}
-    {note && <><header className="space-y-2"><p className="text-xs text-muted-foreground">{inputStateLabels[note.state]}</p><h1 className="text-xl font-semibold tracking-tight">{note.mission_id ? "Поручение цели" : "Личное поручение"}</h1>{note.mission_id && <Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + note.mission_id })}>К задачам цели →</Button>}</header>
+    {note && <><header className="space-y-2"><p className="text-xs text-muted-foreground">{inputStateLabel(note)}</p><h1 className="text-xl font-semibold tracking-tight">{note.mission_id ? "Поручение цели" : "Личное поручение"}</h1>{note.mission_id && <Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + note.mission_id })}>К задачам цели →</Button>}</header>
       <section className="space-y-2"><h2 className="text-base font-semibold">Исходное поручение</h2><PlainText text={note.text} /></section>
-      {latest ? <details className="rounded-lg border border-border p-4"><summary className="cursor-pointer text-sm text-muted-foreground">Сохранённый план</summary><div className="pt-4"><SavedPlan note={note} /></div></details> : <SavedPlan note={note} />}
+      {latest ? <details className="rounded-lg border border-border p-4"><summary className="cursor-pointer text-sm text-muted-foreground">{stoppedTriageLabel(note) ?? "Сохранённый план"}</summary><div className="pt-4"><SavedPlan note={note} /></div></details> : <SavedPlan note={note} />}
       {partials === null && <p className="text-sm text-muted-foreground" role="status">Сведения о частичном результате недоступны. Его наличие и актуальность неизвестны.</p>}
       {latest && <PartialResultBlock item={latest} noteId={noteId} />}
       {partials && partials.length > 1 && <details className="space-y-3"><summary className="cursor-pointer text-sm text-muted-foreground">Предыдущие результаты · {partials.length - 1}</summary><div className="space-y-3 pt-3">{partials.slice(1).map(item => <PartialResultBlock key={item.id} item={item} noteId={noteId} />)}</div></details>}
@@ -661,6 +705,11 @@ function QualityProfilePage({ selection }: { selection: ProfileSelection }) {
   const [result, setResult] = useState<QualityProfileResult | null>(null);
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
+  const readReference = async (selected: QualityReferenceSelection) => {
+    const response = await rpc.call("getQualityReference", selected);
+    if (response.state !== "available") throw new Error("reference_unavailable");
+    return response.data;
+  };
   useEffect(() => {
     let active = true;
     setResult(null);
@@ -676,7 +725,7 @@ function QualityProfilePage({ selection }: { selection: ProfileSelection }) {
     <header className="flex flex-wrap justify-between gap-3"><Button type="button" variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + selection.missionId })}>← К задачам цели</Button><Button type="button" variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
     <div className="space-y-2"><p className="text-xs text-muted-foreground">Предложенный профиль · согласование здесь не проверено</p><h1 className="text-xl font-semibold">{profile?.title ?? "Профиль и образцы"}</h1>{profile && <p className="text-xs text-muted-foreground">v{profile.version} · {profileStatus}</p>}</div>
     {result === null && !failed ? <p className="text-sm text-muted-foreground" role="status">Читаем точную версию профиля…</p> : !profile ? <p className="text-sm text-muted-foreground" role="status">Эту версию профиля прочитать не удалось. Образцы и критерии неизвестны.</p> : <>
-      <p className="text-xs text-muted-foreground">Порог в предложении: {profile.minimum_score}/10. Описания образцов предложены; их источники не проверены.</p>
+      <p className="text-xs text-muted-foreground">Порог в предложении: {profile.minimum_score}/10. Описания образцов предложены. Материалы открываются отдельно.</p>
       <div className="space-y-2">{profile.dimensions.map(dimension => {
         const previewCriterion = dimension.criteria[0];
         const previewState = previewCriterion ? dimension.states.find(state => previewCriterion.state_ids.includes(state.id)) : null;
@@ -685,7 +734,7 @@ function QualityProfilePage({ selection }: { selection: ProfileSelection }) {
         <div className="space-y-4 pt-4">
           <details className="text-sm"><summary className="cursor-pointer text-muted-foreground"><span>Критерии и состояния · {dimension.criteria.length}</span>{previewCriterion && <span className="mt-1 line-clamp-2 text-foreground">{previewCriterion.description}</span>}{previewState && <span className="mt-1 line-clamp-2 text-xs">Состояние: {previewState.description}</span>}</summary><div className="space-y-3 pt-3">{dimension.criteria.map(criterion => <section key={criterion.id} className="space-y-1"><PlainText text={criterion.description} /><p className="text-xs text-muted-foreground">Нужное основание</p><PlainText text={criterion.evidence_required} /></section>)}{dimension.states.length > 0 && <ul className="list-disc space-y-2 pl-4 text-xs text-muted-foreground">{dimension.states.map(state => <li key={state.id}>{state.description}</li>)}</ul>}</div></details>
           <section className="space-y-1"><h2 className="text-xs font-medium">Почему</h2><PlainText text={dimension.applicability_reason} /></section>
-          <div className="grid gap-4 sm:grid-cols-2"><section className="space-y-2"><h2 className="text-sm font-medium">Описание желаемого образца</h2>{dimension.examples.length ? dimension.examples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><p className="text-xs text-muted-foreground">Материал не просмотрен</p></div>) : <p className="text-xs text-muted-foreground">Образцов нет в предложении.</p>}</section><section className="space-y-2"><h2 className="text-sm font-medium">Описание контрпримера</h2>{dimension.counterexamples.length ? dimension.counterexamples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><p className="text-xs text-muted-foreground">Материал не просмотрен</p></div>) : <p className="text-xs text-muted-foreground">Контрпримеров нет в предложении.</p>}</section></div>
+          <div className="grid gap-4 sm:grid-cols-2"><section className="space-y-2"><h2 className="text-sm font-medium">Описание желаемого образца</h2>{dimension.examples.length ? dimension.examples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><QualityReferenceViewer selection={{ mission_id: profile.mission_id, profile_id: profile.profile_id, version: profile.version, profile_hash: profile.profile_hash, dimension_id: dimension.id, kind: "example", sample_id: example.id }} read={readReference} label="Предложенный желаемый образец" /></div>) : <p className="text-xs text-muted-foreground">Образцов нет в предложении.</p>}</section><section className="space-y-2"><h2 className="text-sm font-medium">Описание контрпримера</h2>{dimension.counterexamples.length ? dimension.counterexamples.map(example => <div key={example.id} className="space-y-2 rounded-md bg-secondary/40 p-3"><PlainText text={example.description} /><QualityReferenceViewer selection={{ mission_id: profile.mission_id, profile_id: profile.profile_id, version: profile.version, profile_hash: profile.profile_hash, dimension_id: dimension.id, kind: "counterexample", sample_id: example.id }} read={readReference} label="Предложенный контрпример" /></div>) : <p className="text-xs text-muted-foreground">Контрпримеров нет в предложении.</p>}</section></div>
         </div>
       </details>; })}</div>
       <p className="text-xs text-muted-foreground">Просмотр не согласует образцы, не применяет профиль и не принимает поставку.</p>
@@ -695,6 +744,7 @@ function QualityProfilePage({ selection }: { selection: ProfileSelection }) {
 
 function NativeDelivery({ delivery, artifact }: { delivery: DomainDeliveryRead; artifact: { name: string; sha256: string; size: number } }) {
   const item = delivery.state === "available" && delivery.item?.artifact_refs.some(ref => ref.name === artifact.name && ref.sha256 === artifact.sha256 && ref.size === artifact.size) ? delivery.item : null;
+  const title = item?.scope === "bounded_code_source_review" ? "Проверка исходников · AiweApps" : item?.scope === "bounded_packet_research" ? "Поставка исследования · AiweApps" : "Поставка · AiweApps";
   const current = item !== null && delivery.currentness === "current" && delivery.snapshot_current === true && delivery.context_current === true && item.current;
   const check = item?.state === "blocked" ? "Приёмка заблокирована" : item?.state === "failed" ? "Проверка не пройдена" : "Проверка пройдена";
   const blockers = item?.gate_blockers == null ? null : [...new Set(item.gate_blockers)];
@@ -706,15 +756,15 @@ function NativeDelivery({ delivery, artifact }: { delivery: DomainDeliveryRead; 
     review_failed: "Проверка завершилась ошибкой",
     gate_conditions_unconfirmed: "Условия приёмки не подтверждены",
   };
-  return <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Предметная проверка поставки исследования">
-    <h2 className="text-base font-semibold">Поставка исследования · AiweApps</h2>
+  return <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Предметная проверка поставки">
+    <h2 className="text-base font-semibold">{title}</h2>
     {item ? <>
       <p className="text-sm">{item.outcome === "pass" ? "Проверяющий дал положительный результат." : item.outcome === "fail" ? "Проверяющий указал на проблемы." : item.outcome === "not_run" ? "Результат проверяющего не получен: проверка не выполнена." : "Результат проверяющего неизвестен."}</p>
       <dl className="grid gap-3 text-xs sm:grid-cols-3"><div className="space-y-1"><dt className="text-muted-foreground">Предметная проверка</dt><dd>{check}</dd></div><div className="space-y-1"><dt className="text-muted-foreground">Приёмка поставки в протоколе</dt><dd>{item.acceptance === "accepted" ? "Принятие записано" : item.acceptance === "historical" ? "Прежняя запись" : "Ожидается"}</dd></div><div className="space-y-1"><dt className="text-muted-foreground">Привязка</dt><dd>{current ? "Текущая" : delivery.currentness === "historical" ? "Историческая" : "Не подтверждена"}</dd></div></dl>
       {blockers === null ? <p className="text-xs text-muted-foreground">Наличие препятствий в этой проверке неизвестно.</p> : blockers.length > 0 ? <><ul className="space-y-1 text-xs text-muted-foreground">{blockers.slice(0, 2).map(code => <li key={code}>{blockerLabels[code]}.</li>)}</ul>{blockers.length > 2 && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Другие причины · {blockers.length - 2}</summary><ul className="space-y-1 pt-2 text-muted-foreground">{blockers.slice(2).map(code => <li key={code}>{blockerLabels[code]}.</li>)}</ul></details>}</> : item.state === "blocked" ? <p className="text-xs text-muted-foreground">Причина блокировки не указана.</p> : null}
       {!current && <p className="text-xs text-muted-foreground">{delivery.context_current === false ? "Условия цели изменились. Показана сохранённая поставка этого файла." : delivery.currentness === "historical" ? "Показана сохранённая поставка прежней попытки этого файла." : "Актуальность наблюдения поставки не подтверждена."}</p>}
     </> : <p className="text-sm text-muted-foreground">{delivery.state === "not_assessed" ? "Предметная проверка поставки не записана." : "Данные предметной проверки этой поставки недоступны."}</p>}
-    <p className="text-xs text-muted-foreground">Проверка ограничена пакетом исследования. Она не подтверждает приёмку всей цели.</p>
+    <p className="text-xs text-muted-foreground">{item?.scope === "bounded_code_source_review" ? "Проверка ограничена исходниками кода. Она не подтверждает запуск приложения или приёмку всей цели." : item?.scope === "bounded_packet_research" ? "Проверка ограничена пакетом исследования. Она не подтверждает приёмку всей цели." : "Область проверки не подтверждена. Приёмка всей цели остаётся отдельной."}</p>
   </section>;
 }
 
@@ -736,7 +786,7 @@ function TaskResultPage({ missionId, taskId, bindingId }: { missionId: string; t
   const historicalReview = artifact?.currentness === "historical" && artifact.completionEvidence?.contextCurrent === true && artifact.completionEvidence.items.some(item => item.state === "resolved" && item.kind === "consumer_review" && item.artifact?.binding_id === bindingId && item.review?.candidate_current === true && item.review.applicable === true);
   const repeatedReadiness = artifact?.completionEvidence?.items.some(item => item.state === "resolved" && item.kind === "consumer_review" && item.review?.id === artifact.review.review_id && item.review.candidate_id === artifact.review.candidate_id);
   const attemptReadiness = artifact && !repeatedReadiness ? <ReadinessSummary key={artifact.review.review_id + ":" + artifact.review.readiness?.assessment_id} readiness={artifact.review.readiness} candidateId={artifact.review.candidate_id} reviewId={artifact.review.review_id} missionId={missionId} /> : null;
-  return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex flex-wrap justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => artifact ? navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId }) : navigate.toPluginPanel(PANEL_PATH)}>{artifact ? "← К задаче" : "← Все цели"}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header><h1 className="text-xl font-semibold">Полученное исследование задачи</h1>{result === null && !failed && <p className="text-sm text-muted-foreground" role="status">Проверяем и читаем сохранённый файл…</p>}{failed || result !== null && !artifact ? <p className="text-sm text-muted-foreground" role="status">Файл прочитать не удалось. Его содержание не подтверждено этим чтением.</p> : null}{artifact && <>
+  return <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8"><header className="flex flex-wrap justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => artifact ? navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + "/task/" + taskId }) : navigate.toPluginPanel(PANEL_PATH, { subPath: "goals" })}>{artifact ? "← К задаче" : "← Все цели"}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header><h1 className="text-xl font-semibold">Полученное исследование задачи</h1>{result === null && !failed && <p className="text-sm text-muted-foreground" role="status">Проверяем и читаем сохранённый файл…</p>}{failed || result !== null && !artifact ? <p className="text-sm text-muted-foreground" role="status">Файл прочитать не удалось. Его содержание не подтверждено этим чтением.</p> : null}{artifact && <>
     {!current && <p className="text-sm text-muted-foreground">{artifact.taskContextCurrent === false ? "Результат попытки по прежним условиям." : artifact.taskVersionCurrent === false ? "Результат из прежней версии задачи." : artifact.currentness === "historical" ? "Результат прежней попытки." : "Связь результата с текущими условиями не подтверждена."}</p>}
     <NativeDelivery delivery={artifact.domainDelivery} artifact={artifact.artifact} />
     {artifact.completionEvidence && <section className="space-y-3 rounded-lg border border-border bg-card p-4" aria-label="Основания завершения"><h2 className="text-base font-semibold">Основания отметки «Готово»</h2><p className="text-sm">Этот файл указан среди сохранённых оснований завершения задачи.</p><CompletionEvidence items={artifact.completionEvidence.items} missionId={missionId} taskId={taskId} contextCurrent={artifact.completionEvidence.contextCurrent} showFiles={false} /><p className="text-xs text-muted-foreground">Приёмка всей цели остаётся отдельной.</p></section>}
@@ -754,12 +804,13 @@ function taskCardBody(task: Task) {
   return task.next_action;
 }
 
-function MissionList({ onCompose, composeLabel, composerId }: { onCompose: () => void; composeLabel: string; composerId: string }) {
+function MissionList({ onCompose, composeLabel, composerId, autoOpen, onInputs, inputsId }: { onCompose: () => void; composeLabel: string; composerId: string; autoOpen: boolean; onInputs: () => void; inputsId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const [result, setResult] = useState<MissionsResult | null>(null);
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
+  const didAutoOpen = useRef(false);
   useEffect(() => {
     let active = true;
     setResult(null);
@@ -767,9 +818,16 @@ function MissionList({ onCompose, composeLabel, composerId }: { onCompose: () =>
     void rpc.call("listMissions", null).then(value => { if (active) setResult(value); }).catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
   }, [rpc, revision]);
+  useEffect(() => {
+    if (!autoOpen || didAutoOpen.current || result?.state !== "available") return;
+    const activeMissions = result.data.missions.filter(mission => mission.state === "active");
+    if (activeMissions.length !== 1) return;
+    didAutoOpen.current = true;
+    navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + activeMissions[0].id });
+  }, [autoOpen, result, navigate]);
   const missions = result?.state === "available" ? [...result.data.missions].sort((a, b) => Number(b.state === "active") - Number(a.state === "active")) : null;
   return <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
-    <header className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs text-muted-foreground">Личное управление</p><h1 className="text-2xl font-semibold tracking-tight">Цели</h1></div><div className="flex flex-wrap gap-2"><Button size="sm" aria-controls={composerId} onClick={onCompose}>{composeLabel}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>
+    <header className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs text-muted-foreground">Личное управление</p><h1 className="text-2xl font-semibold tracking-tight">Цели</h1></div><div className="flex flex-wrap gap-2"><Button type="button" variant="ghost" size="sm" aria-controls={inputsId} onClick={onInputs}>Личные поручения</Button><Button size="sm" aria-controls={composerId} onClick={onCompose}>{composeLabel}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>
     {result === null && !failed ? <p className="text-sm text-muted-foreground" role="status">Читаем Personal OS…</p> : failed || result?.state === "unavailable" ? <Unavailable result={result?.state === "unavailable" ? result : null} /> : null}
     {missions && <section className="grid gap-3 md:grid-cols-2" aria-label="Цели Personal OS">{missions.map(mission => <button type="button" key={mission.id} onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + mission.id })} className="flex cursor-pointer flex-col items-start gap-3 rounded-lg border border-border bg-card p-5 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <span className="text-xs text-muted-foreground">{missionLabels[mission.state] ?? "Статус: " + mission.state}</span><h2 className="text-lg font-medium">{mission.title}</h2><span className="line-clamp-2 text-sm text-muted-foreground">{mission.next_action?.text ?? "Следующий шаг не указан"}</span><span className="mt-auto text-xs font-medium">Открыть задачи →</span>
@@ -792,15 +850,18 @@ function TaskDetail({ task, refreshNonce }: { task: Task; refreshNonce: number }
   </article>;
 }
 
-function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId }: { missionId: string; taskId: string | null; onCompose: () => void; composeLabel: string; composerId: string }) {
+function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId, onInputs, inputsId }: { missionId: string; taskId: string | null; onCompose: () => void; composeLabel: string; composerId: string; onInputs: () => void; inputsId: string }) {
   const rpc = useRpc<PersonalOsContract>();
   const navigate = useBbNavigate();
   const [mission, setMission] = useState<MissionResult | null>(null);
   const [tasks, setTasks] = useState<TasksResult | null>(null);
   const [activity, setActivity] = useState<MissionActivityResult | null>(null);
+  const [activityRequest, setActivityRequest] = useState<{ key: string; pending: boolean } | null>(null);
+  const activityGeneration = useRef(0);
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
   const [doneExpanded, setDoneExpanded] = useState(false);
+  const activityKey = missionId + ":" + revision + (taskId ? ":detail" : ":board");
   useEffect(() => {
     let active = true;
     setMission(null);
@@ -813,33 +874,37 @@ function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId }
   }, [rpc, missionId, revision]);
   useEffect(() => {
     let active = true;
+    const generation = ++activityGeneration.current;
+    const current = () => active && activityGeneration.current === generation;
     setActivity(null);
-    if (!taskId) void rpc.call("getMissionActivity", { missionId }).then(value => { if (active) setActivity(value); }).catch(() => { if (active) setActivity(null); });
+    setActivityRequest({ key: activityKey, pending: !taskId });
+    if (!taskId) void rpc.call("getMissionActivity", { missionId }).then(value => { if (current()) setActivity(value); }).catch(() => { if (current()) setActivity(null); }).finally(() => { if (current()) setActivityRequest({ key: activityKey, pending: false }); });
     return () => { active = false; };
-  }, [rpc, missionId, revision, !!taskId]);
+  }, [rpc, missionId, activityKey]);
   const go = (id: string | null) => navigate.toPluginPanel(PANEL_PATH, { subPath: "mission/" + missionId + (id ? "/task/" + id : "") });
   const board = tasks?.state === "available" && tasks.data.state === "available" ? tasks.data : null;
   const activityData = activity?.state === "available" && activity.data.state === "available" && activity.data.scope === "mission" && activity.data.mission_id === missionId && activity.data.task_id === null ? activity.data : null;
+  const activityPending = !taskId && (activityRequest?.key !== activityKey || activityRequest.pending);
   const historicalTasks = board?.items.filter(task => task.state === "done" && task.completion_current !== true) ?? [];
   const selectedTask = taskId && board ? board.items.find(task => task.id === taskId) : null;
   return <main className="flex shrink-0 flex-col gap-4 p-4 md:p-6">
     {taskId ? <>
       <header className="flex flex-wrap items-center justify-between gap-3"><Button variant="ghost" size="sm" onClick={() => go(null)}>← К задачам</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></header>
       {mission?.state === "available" && <section className="space-y-2"><p className="text-xs text-muted-foreground">{missionLabels[mission.data.state] ?? "Статус: " + mission.data.state}</p><h1 className="text-2xl font-semibold tracking-tight">{mission.data.title}</h1></section>}
-    </> : <header className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1 space-y-1">{mission?.state === "available" ? <><p className="text-xs text-muted-foreground">{missionLabels[mission.data.state] ?? "Статус: " + mission.data.state}</p><h1 className="text-xl font-semibold tracking-tight">{mission.data.title}</h1>{mission.data.next_action?.text && <p className="line-clamp-2 max-w-3xl text-sm text-muted-foreground"><span className="font-medium text-foreground">Дальше: </span>{mission.data.next_action.text}</p>}</> : <h1 className="text-xl font-semibold tracking-tight">Задачи цели</h1>}</div><div className="flex flex-wrap gap-2"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH)}>Все цели</Button><Button size="sm" aria-controls={composerId} onClick={onCompose}>{composeLabel}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>}
+    </> : <header className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1 space-y-1">{mission?.state === "available" ? <><p className="text-xs text-muted-foreground">{missionLabels[mission.data.state] ?? "Статус: " + mission.data.state}</p><h1 className="text-xl font-semibold tracking-tight">{mission.data.title}</h1>{mission.data.next_action?.text && <p className="line-clamp-2 max-w-3xl text-sm text-muted-foreground"><span className="font-medium text-foreground">Дальше: </span>{mission.data.next_action.text}</p>}</> : <h1 className="text-xl font-semibold tracking-tight">Задачи цели</h1>}</div><div className="flex flex-wrap gap-2"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: "goals" })}>Все цели</Button><Button type="button" variant="ghost" size="sm" aria-controls={inputsId} onClick={onInputs}>Личные поручения</Button><Button size="sm" aria-controls={composerId} onClick={onCompose}>{composeLabel}</Button><Button variant="outline" size="sm" onClick={() => setRevision(value => value + 1)}>Обновить</Button></div></header>}
     {mission === null && !failed && <p className="text-sm text-muted-foreground" role="status">Читаем цель и задачи…</p>}
     {failed && <Unavailable result={null} />}
     {mission?.state === "unavailable" && <Unavailable result={mission} />}
     {tasks?.state === "unavailable" && <Unavailable result={tasks} />}
     {tasks?.state === "available" && tasks.data.state !== "available" && <p className="rounded-lg border border-border p-5 text-sm text-muted-foreground" role="status">Список задач недоступен. Количество и состояние неизвестны.</p>}
     {board && taskId && (selectedTask ? <TaskDetail task={selectedTask} refreshNonce={revision} /> : <p className="text-sm text-muted-foreground">Задачи нет в полученном списке.{board.truncated ? " Список неполный." : ""}</p>)}
-    {board && !taskId && <><div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-4">{columns.map(column => {
+    {board && !taskId && <>{activityPending && <p className="text-xs text-muted-foreground" role="status">Читаем этапы исполнения…</p>}<div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-4">{columns.map(column => {
       const items = board.items.filter(task => task.state === column.state && (task.state !== "done" || task.completion_current === true));
       const count = column.state === "done" ? board.current_done_count : board.counts?.[column.state];
       const compact = column.state === "done" && !doneExpanded && items.length > 3;
       const visibleItems = compact ? items.slice(-3) : items;
       const completeDoneList = !board.truncated && count !== null && count === items.length;
-      return <section key={column.state} className="min-w-0 rounded-lg bg-secondary/40 p-3" aria-label={column.title}><header className="mb-3 flex items-center justify-between gap-2 px-1"><h2 className="text-sm font-medium">{column.title}</h2><span className="text-xs tabular-nums text-muted-foreground">{count ?? "?"}</span></header><div className="space-y-2">{visibleItems.map(task => <button type="button" key={task.id} onClick={() => go(task.id)} className="flex w-full cursor-pointer flex-col gap-3 rounded-md border border-border bg-card p-4 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="line-clamp-2 text-sm font-medium">{task.title}</span>{taskCardBody(task) && <span className="line-clamp-2 text-xs text-muted-foreground">{taskCardBody(task)}</span>}{(task.owner_label || task.state === "doing") && <span className="text-xs text-muted-foreground">{task.owner_label ?? "Исполнитель не указан"}</span>}{task.context_current !== true && <span className="text-xs text-muted-foreground">Актуальность не подтверждена</span>}<TaskActivityBadge activity={activityData?.items.find(item => item.task.id === task.id) ?? null} task={task} /></button>)}{items.length === 0 && <p className="px-1 py-4 text-xs text-muted-foreground">{board.truncated ? "Нет в полученной части" : "Нет задач"}</p>}</div>{column.state === "done" && items.length > 3 && <div className="space-y-1 pt-3"><p className="px-1 text-xs text-muted-foreground">{visibleItems.length} из {count ?? "неизвестного количества"}{!completeDoneList ? " · полученная часть" : ""}</p><Button type="button" variant="ghost" size="sm" aria-expanded={doneExpanded} onClick={() => setDoneExpanded(value => !value)}>{doneExpanded ? "Свернуть" : (completeDoneList ? "Показать все · " : "Показать полученные · ") + items.length}</Button></div>}</section>;
+      return <section key={column.state} className="min-w-0 rounded-lg bg-secondary/40 p-3" aria-label={column.title}><header className="mb-3 flex items-center justify-between gap-2 px-1"><h2 className="text-sm font-medium">{column.title}</h2><span className="text-xs tabular-nums text-muted-foreground">{count ?? "?"}</span></header><div className="space-y-2">{visibleItems.map(task => <button type="button" key={task.id} onClick={() => go(task.id)} className="flex w-full cursor-pointer flex-col gap-3 rounded-md border border-border bg-card p-4 text-left transition-colors hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="line-clamp-2 text-sm font-medium">{task.title}</span>{taskCardBody(task) && <span className="line-clamp-2 text-xs text-muted-foreground">{taskCardBody(task)}</span>}{(task.owner_label || task.state === "doing") && <span className="text-xs text-muted-foreground">{task.owner_label ?? "Исполнитель не указан"}</span>}{task.context_current !== true && <span className="text-xs text-muted-foreground">Актуальность не подтверждена</span>}{!activityPending && <TaskActivityBadge activity={activityData?.items.find(item => item.task.id === task.id) ?? null} task={task} />}</button>)}{items.length === 0 && <p className="px-1 py-4 text-xs text-muted-foreground">{board.truncated ? "Нет в полученной части" : "Нет задач"}</p>}</div>{column.state === "done" && items.length > 3 && <div className="space-y-1 pt-3"><p className="px-1 text-xs text-muted-foreground">{visibleItems.length} из {count ?? "неизвестного количества"}{!completeDoneList ? " · полученная часть" : ""}</p><Button type="button" variant="ghost" size="sm" aria-expanded={doneExpanded} onClick={() => setDoneExpanded(value => !value)}>{doneExpanded ? "Свернуть" : (completeDoneList ? "Показать все · " : "Показать полученные · ") + items.length}</Button></div>}</section>;
     })}</div>{board.truncated && <p className="text-xs text-muted-foreground">Показана ограниченная часть списка. Счётчики относятся ко всей цели.</p>}{(historicalTasks.length > 0 || (board.historical_done_count !== null && board.historical_done_count > 0)) && <details className="rounded-lg border border-border p-4 text-sm"><summary className="cursor-pointer text-muted-foreground">Завершено по прежним условиям · {board.historical_done_count ?? "Количество неизвестно"}</summary><div className="flex flex-col items-start gap-2 pt-3"><p className="text-xs text-muted-foreground">Эти результаты не входят в текущее «Готово».</p>{historicalTasks.map(task => <Button key={task.id} variant="ghost" className="h-auto max-w-full whitespace-normal text-left" onClick={() => go(task.id)}>{task.title} →</Button>)}{board.truncated && <p className="text-xs text-muted-foreground">В истории показаны только задачи из полученной части списка.</p>}</div></details>}</>}
     {mission?.state === "available" && !taskId && <details className="max-w-3xl text-sm"><summary className="cursor-pointer text-muted-foreground">Исходная цель</summary><p className="whitespace-pre-wrap break-words pt-3 text-muted-foreground">{mission.data.objective}</p></details>}
     <footer className="flex flex-wrap gap-3 text-xs text-muted-foreground"><span>Сохранённые статусы задач, не работа процессов</span>{tasks?.state === "available" && <ReadTime value={tasks.observedAt} />}</footer>
@@ -847,21 +912,39 @@ function MissionBoard({ missionId, taskId, onCompose, composeLabel, composerId }
 }
 
 function PersonalOsPanel({ subPath }: { subPath: string }) {
+  const navigate = useBbNavigate();
   const [inputRevision, setInputRevision] = useState(0);
   const [composeLabel, setComposeLabel] = useState("+ Поручение");
   const [openRequest, setOpenRequest] = useState(0);
   const composerId = useId();
   const onCompose = () => setOpenRequest(value => value + 1);
+  const inputsId = useId();
+  const inputsRef = useRef<HTMLDetailsElement | null>(null);
+  const handledInputsRequest = useRef(0);
+  const [openPersonalRequest, setOpenPersonalRequest] = useState(0);
+  const onInputs = () => {
+    if (!subPath) navigate.toPluginPanel(PANEL_PATH, { subPath: "goals" });
+    setOpenPersonalRequest(value => value + 1);
+  };
   const match = /^mission\/(mission_[a-f0-9]{32})(?:\/task\/(task_[a-f0-9]{32})(?:\/result\/(task_execution_[a-f0-9]{32}))?)?$/.exec(subPath);
   const inputMatch = /^input\/(note_[a-f0-9]{32})(?:\/result\/(input_result_[a-f0-9]{32}))?$/.exec(subPath);
   const profileMatch = /^mission\/(mission_[a-f0-9]{32})\/profile\/([A-Za-z0-9_-]{1,100})\/([1-9][0-9]{0,8})\/([a-f0-9]{64})$/.exec(subPath);
   const parsedProfile = profileMatch ? qualityProfileInputSchema.safeParse({ missionId: profileMatch[1], profileId: profileMatch[2], version: Number(profileMatch[3]), profileHash: profileMatch[4] }) : null;
   const profileSelection = parsedProfile?.success ? parsedProfile.data : null;
-  const overview = !subPath || !!match && !match[2];
+  const chooser = subPath === "goals";
+  const overview = !subPath || chooser || !!match && !match[2];
+  useEffect(() => {
+    const panel = inputsRef.current;
+    if (!overview || !openPersonalRequest || handledInputsRequest.current === openPersonalRequest || !panel) return;
+    handledInputsRequest.current = openPersonalRequest;
+    panel.open = true;
+    panel.scrollIntoView({ block: "start" });
+    panel.querySelector<HTMLElement>("summary")?.focus();
+  }, [overview, openPersonalRequest]);
   return <div className="min-h-0 flex-1 overflow-y-auto">
-    {!subPath ? <MissionList key="mission-list" onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : profileSelection ? <QualityProfilePage key={"quality-profile:" + profileSelection.missionId + ":" + profileSelection.profileId + ":" + profileSelection.version + ":" + profileSelection.profileHash} selection={profileSelection} /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div key="unsupported-route" className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}
-    <div key="owner-composer" hidden={!overview} className="px-4 pb-4 md:px-6"><InputComposer missionId={match?.[1] ?? null} onSaved={() => setInputRevision(value => value + 1)} onStatus={setComposeLabel} openRequest={openRequest} composerId={composerId} /></div>
-    {overview && <div key={"recent-inputs:" + (match?.[1] ?? "personal")} className="px-4 pb-6 md:px-6"><details className="mx-auto w-full max-w-5xl rounded-lg border border-border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">Мои поручения и результаты</summary><InputList key={"input-list:" + (match?.[1] ?? "personal")} missionId={match?.[1] ?? null} refreshRevision={inputRevision} /></details></div>}
+    {!subPath || chooser ? <MissionList key={chooser ? "mission-list:chooser" : "mission-list:default"} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} autoOpen={!chooser} onInputs={onInputs} inputsId={inputsId} /> : profileSelection ? <QualityProfilePage key={"quality-profile:" + profileSelection.missionId + ":" + profileSelection.profileId + ":" + profileSelection.version + ":" + profileSelection.profileHash} selection={profileSelection} /> : match ? match[2] && match[3] ? <TaskResultPage key={"task-artifact:" + match[1] + ":" + match[2] + ":" + match[3]} missionId={match[1]} taskId={match[2]} bindingId={match[3]} /> : <MissionBoard key={"mission-board:" + match[1]} missionId={match[1]} taskId={match[2] ?? null} onCompose={onCompose} composeLabel={composeLabel} composerId={composerId} onInputs={onInputs} inputsId={inputsId} /> : inputMatch ? inputMatch[2] ? <InputArtifactPage key={"input-artifact:" + inputMatch[1] + ":" + inputMatch[2]} noteId={inputMatch[1]} resultId={inputMatch[2]} /> : <InputPage key={"input-detail:" + inputMatch[1]} noteId={inputMatch[1]} /> : <div key="unsupported-route" className="p-6 text-sm">Этот адрес Personal OS не поддерживается.</div>}
+    <div key="owner-composer" hidden={!overview} className="px-4 pb-4 md:px-6"><InputComposer missionId={match?.[1] ?? null} onSaved={() => setInputRevision(value => value + 1)} onStatus={setComposeLabel} openRequest={openRequest} composerId={composerId} visible={overview} /></div>
+    {overview && <div key={"recent-inputs:" + (match?.[1] ?? "personal")} className="px-4 pb-6 md:px-6"><details ref={inputsRef} id={inputsId} className="mx-auto w-full max-w-5xl rounded-lg border border-border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">Мои поручения и результаты</summary><InputList key={"input-list:" + (match?.[1] ?? "personal")} missionId={match?.[1] ?? null} refreshRevision={inputRevision} openPersonalRequest={openPersonalRequest} /></details></div>}
   </div>;
 }
 

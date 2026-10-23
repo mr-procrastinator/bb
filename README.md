@@ -13,8 +13,9 @@ The Personal OS plugin reads goals, tasks, saved instructions, plans and attache
 See [integration architecture and progress](docs/personal-os.md) and [owner rules](.bb/AGENTS.md).
 
 An exact research result now separates the reviewer's report, domain gate blockers and protocol
-acceptance. Proposed quality profiles and sample descriptions open by exact version. These views
-do not confirm samples or accept a product; the main task board remains unchanged.
+acceptance. Proposed quality profiles and sample materials open by exact version and file hash.
+Changed materials remain unavailable. These views do not confirm samples or accept a product.
+Browser dictation appends a draft for review; it never submits an instruction by itself.
 
 For the already enrolled local pilot, use `node scripts/personal-os-runtime.mjs setup`, then `start`,
 `status` or `stop`. The manager uses the isolated data directory and Node24/ABI137. It does not enroll,

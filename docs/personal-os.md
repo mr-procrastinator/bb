@@ -28,6 +28,10 @@ the product plan, one dispatch owner, budgets, resource fences, and domain quali
 BB keeps its conversations, environments, and provider sessions. Tasks is not a second editable copy
 of Personal OS tasks. The Personal OS plugin reads existing owner APIs and sends bounded owner input,
 without model execution. Its command ledger records transport recovery, not another task database.
+Personal OS also owns immutable skill-package captures, their hashes and reported
+problem/evaluation bindings. BB does not duplicate that library or promote skills.
+These integration notes describe the BB boundary; Personal OS architecture, quality
+requirements and owner contracts stay in their own project documents.
 
 ## First implementation
 
@@ -39,7 +43,12 @@ or task-bound research results. Bounded text input uses only the existing person
 input POST. There is no arbitrary URL, redirect or browser-selected host.
 `/api/control` is excluded: its skill catalog snapshot can write skill-version observations.
 
-Show mission selection, actual tasks by state, and task details. Unknown and disconnected sources
+The default panel opens the task board when exactly one goal is active; otherwise it shows
+the chooser. The explicit **Цели** route keeps the chooser available. The input draft still starts
+as personal input; linking it to the displayed goal/version requires **К текущей цели**.
+Existing drafts keep their saved target. **Личные поручения** opens the one shared
+instruction list in personal scope; **Эта цель** switches that list explicitly to the
+goal without changing the composer target. Unknown and disconnected sources
 are visible, not empty successful results. `doing` is a saved task status, not proof of a live process.
 CLI reads use the same typed path as the panel. A build is not UI or product acceptance.
 
@@ -48,7 +57,12 @@ The plugin stores that command before contacting Personal OS. Retry reuses it an
 idempotency key; an uncertain outcome does not create a new UUID. The browser preserves its draft
 and pending request across reload, without automatic submission. General input stays in the personal
 inbox. Goal input requires the explicit goal/version. No task-status write, dispatch or automatic
-execution is added. Detailed limits live in `plugins/personal-os/README.md`.
+execution is added. Browser dictation adds final recognized text to that same protected draft;
+it never submits. The owner stops capture, checks the text and presses **Добавить** separately.
+Unsupported browsers or denied microphone permission retain text input. A browser speech service
+may process audio externally; the plugin sends only text with optional `inputKind:voice`.
+Microphone capture and speech recognition in external Chrome or on a phone remain unverified. Detailed limits and
+recovery behavior live in the [plugin guide](../plugins/personal-os/README.md#voice-drafting).
 
 ## Task activity and result views
 
@@ -108,7 +122,9 @@ opening history. Historical and unknown states must still be distinguishable.
 ## Native Delivery and profile version projection
 
 The source now adds a read-only native Delivery view for the exact task-bound
-received research file, plus an exact profile/examples page. Native snapshots
+received research file, plus an exact profile/examples page. The generic Delivery DTO also
+accepts bounded code-source review metadata; `TaskResultPage` remains research-only and
+does not open code bundles or prove application execution. Native snapshots
 carry a separate bounded Delivery collection; legacy execution and immutable
 artifact manifests retain their existing contract. Personal OS selects by exact
 DID/revision/attempt/input/request/profile/artifact identity from its saved
@@ -120,8 +136,13 @@ Native `passed` and its acceptance acknowledgement are separate from Personal OS
 consumer inspection and acceptance of the whole goal. The BB result page reads
 that distinction; it has no Delivery accept or profile-adoption action. The exact
 profile RPC/CLI uses mission/profile/version/hash and exposes only proposed
-criteria, scenarios and example descriptions, without source locators or clickable
-private references. See the [plugin read contract](../plugins/personal-os/README.md#native-delivery-and-exact-profile-reads)
+criteria, scenarios and example descriptions without source locators. A separate explicit
+`getQualityReference` RPC/CLI read selects mission/profile/version/hash, dimension, kind and
+sample ID. It displays bounded PNG/JPEG or plain text only when the owner-pinned SHA-256
+matches the returned bytes. Missing pins, changed files and unsupported sources stay
+unavailable; another version or sample is never substituted. The preview does not confirm
+anchors, calibrate a reviewer or accept a profile. It does not expose a private source URL.
+See the [plugin read contract](../plugins/personal-os/README.md#native-delivery-and-exact-profile-reads)
 and Personal OS integration contracts §36 for fields and limits.
 
 These additions describe implemented source boundaries. They do not add a new live
@@ -388,3 +409,15 @@ review led to clearer labels, criteria-first details and version/currentness. Ev
 `native-quality-ui-manual-20261023.json.gz`. Final targeted typecheck/prepare and plugin build/reload
 passed. No automated tests ran. This is a narrow research read/review path, not owner acceptance,
 a BB provider execution success, phone support or a 9/10 product claim.
+
+The later eight-agent slice added draft-only voice input, exact sample bytes and explicit personal
+navigation. Root manually observed the unique-active-goal landing, the personal feed link, a text draft
+and personal target surviving reload, and clearing that root-created draft without submitting it.
+The exact profile displayed the pinned image and text; a changed sample remained unavailable.
+Transient activity loading now shows one loading message rather than an unknown badge on every task.
+Stopped-triage labels passed source review; no failed model was deliberately created for a UI check.
+Targeted typecheck/prepare completed nine build tasks; official plugin build/reload succeeded. No tests ran.
+Runtime captures: `evidence/director-board-final-20261023.png` and
+`evidence/quality-reference-{image,text,stale}-20261023.png` under the isolated BB data directory.
+Independent screenshot review still found two gaps: a concrete owner-decision action and a full-size
+sample view. Actual microphone/audio, phone access and owner acceptance remain unverified.
